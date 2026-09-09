@@ -19,8 +19,13 @@ import {
   createClientRecord,
   createFinanceMovement,
   createServiceRecord,
+  getAuthSession,
+  signInWithPassword,
+  signUpWithPassword,
+  signOut,
   isSupabaseConfigured,
   loadBarberFlowData,
+  subscribeToAuthState,
 } from './lib/supabase';
 
 const REPORT_DATE = '2026-09-09';
@@ -117,18 +122,49 @@ const initials = (name) =>
 const dateInputDefault = () => new Date().toISOString().slice(0, 10);
 
 function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
+  const [authError, setAuthError] = useState('');
   const [active, setActive] = useState('Dashboard');
   const [menuOpen, setMenuOpen] = useState(false);
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [data, setData] = useState(isSupabaseConfigured ? EMPTY_DATA : FALLBACK_DATA);
+  const [data, setData] = useState(EMPTY_DATA);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setAuthLoading(false);
+      return undefined;
+    }
+
+    let mounted = true;
+    getAuthSession()
+      .then((currentSession) => {
+        if (mounted) setSession(currentSession);
+      })
+      .catch((sessionError) => {
+        if (mounted) setAuthError(sessionError.message || 'Não foi possível verificar sua sessão.');
+      })
+      .finally(() => {
+        if (mounted) setAuthLoading(false);
+      });
+
+    const unsubscribe = subscribeToAuthState((nextSession) => {
+      setSession(nextSession);
+      setAuthError('');
+      setError('');
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
-    if (!isSupabaseConfigured) {
-      setData(FALLBACK_DATA);
-      setLoading(false);
+    if (!session) {
       return;
     }
 
@@ -141,11 +177,11 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [session]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (session) refresh();
+  }, [refresh, session]);
 
   const derivedData = useMemo(() => {
     const totals = data.appointments.reduce((result, appointment) => {
@@ -168,15 +204,11 @@ function App() {
     setSaving(true);
     setError('');
     try {
-      if (isSupabaseConfigured) {
-        if (type === 'appointment') await createAppointmentRecord(values);
-        if (type === 'client') await createClientRecord(values);
-        if (type === 'service') await createServiceRecord(values);
-        if (type === 'finance') await createFinanceMovement(values);
-        await refresh();
-      } else {
-        setData((current) => addFallbackRecord(current, type, values));
-      }
+      if (type === 'appointment') await createAppointmentRecord(values);
+      if (type === 'client') await createClientRecord(values);
+      if (type === 'service') await createServiceRecord(values);
+      if (type === 'finance') await createFinanceMovement(values);
+      await refresh();
       setModal(null);
     } catch (saveError) {
       setError(saveError.message || 'Não foi possível salvar este registro.');
@@ -203,6 +235,18 @@ function App() {
     return <Dashboard data={derivedData} onNew={openNewAppointment} />;
   };
 
+  if (!isSupabaseConfigured) {
+    return <AuthPanel configured={false} />;
+  }
+
+  if (authLoading) {
+    return <div className="auth-shell"><div className="loading-state">Verificando sua sessão...</div></div>;
+  }
+
+  if (!session) {
+    return <AuthPanel error={authError} onError={setAuthError} />;
+  }
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
@@ -221,7 +265,7 @@ function App() {
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setMenuOpen(!menuOpen)}><Menu size={22} /></button>
           <div><p className="eyebrow">QUARTA-FEIRA, 09 DE SETEMBRO</p><h1>{active}</h1></div>
-          <div className="top-actions"><button className="icon-btn"><Bell size={19} /><i /></button><div className="avatar">CA</div></div>
+          <div className="top-actions"><button className="icon-btn"><Bell size={19} /><i /></button><div className="avatar">{initials(session.user.email || 'U')}</div><button className="logout-btn" onClick={() => signOut().catch((signOutError) => setError(signOutError.message))}>Sair</button></div>
         </header>
         {error && <div className="error-banner" role="alert"><strong>Não foi possível concluir a operação.</strong><span>{error}</span><button onClick={refresh}>Tentar novamente</button></div>}
         {loading ? <div className="loading-state">Carregando dados da sua barbearia...</div> : renderContent()}
@@ -255,6 +299,82 @@ function addFallbackRecord(current, type, values) {
     ...current,
     appointments: [...current.appointments, { id, date: values.date, time: values.time, clientId: values.clientId, serviceId: values.serviceId, client: client?.name || 'Cliente', service: service?.name || 'Serviço', barber: values.barber, status: 'Agendado', amountCents: service?.priceCents || 0 }],
   };
+}
+
+function AuthPanel({ configured = true, error = '', onError }) {
+  const [mode, setMode] = useState('login');
+  const [form, setForm] = useState({ email: '', password: '', passwordConfirm: '', shopName: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const update = (field) => (event) => {
+    setForm((current) => ({ ...current, [field]: event.target.value }));
+  };
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setFormError('');
+    setNotice('');
+    onError?.('');
+
+    if (mode === 'signup' && form.password !== form.passwordConfirm) {
+      setFormError('As senhas não conferem.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (mode === 'login') {
+        await signInWithPassword(form);
+      } else {
+        const result = await signUpWithPassword(form);
+        if (!result.session) {
+          setNotice('Cadastro realizado. Verifique seu e-mail para confirmar a conta antes de entrar.');
+        }
+      }
+    } catch (authSubmitError) {
+      const message = authSubmitError.message || 'Não foi possível concluir a autenticação.';
+      setFormError(message);
+      onError?.(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (!configured) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="brand auth-brand"><span className="brand-mark">B</span><span>Barber<span>Flow</span></span></div>
+          <h1>Configure o acesso</h1>
+          <p className="auth-description">Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no arquivo .env para habilitar o login seguro.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="brand auth-brand"><span className="brand-mark">B</span><span>Barber<span>Flow</span></span></div>
+        <h1>{mode === 'login' ? 'Entre na sua conta' : 'Crie sua conta'}</h1>
+        <p className="auth-description">{mode === 'login' ? 'Acesse a gestão da sua barbearia.' : 'Sua conta receberá uma barbearia pessoal automaticamente.'}</p>
+        {(formError || error) && <div className="auth-error" role="alert">{formError || error}</div>}
+        {notice && <div className="auth-notice" role="status">{notice}</div>}
+        <form onSubmit={submit} className="auth-form">
+          {mode === 'signup' && <label>Nome da barbearia<input required value={form.shopName} onChange={update('shopName')} placeholder="Ex.: BarberFlow Centro" /></label>}
+          <label>E-mail<input required type="email" autoComplete="email" value={form.email} onChange={update('email')} placeholder="voce@exemplo.com" /></label>
+          <label>Senha<input required minLength="6" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={update('password')} placeholder="Mínimo de 6 caracteres" /></label>
+          {mode === 'signup' && <label>Confirme a senha<input required minLength="6" type="password" autoComplete="new-password" value={form.passwordConfirm} onChange={update('passwordConfirm')} /></label>}
+          <button className="primary auth-submit" disabled={submitting}>{submitting ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Criar conta'}</button>
+        </form>
+        <button className="auth-switch" onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setFormError(''); setNotice(''); }}>
+          {mode === 'login' ? 'Ainda não tenho uma conta' : 'Já tenho uma conta'}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Dashboard({ data, onNew }) {
