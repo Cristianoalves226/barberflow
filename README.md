@@ -16,7 +16,7 @@ controle financeiro.
    conteúdo de
    `supabase/migrations/20260909180000_barberflow_mvp.sql`. Execute a query.
    Ela cria as tabelas, relacionamentos, índices, triggers de timestamp, RLS e
-   o tenant de demonstração.
+   o vínculo seguro entre usuários e barbearias.
 3. Copie `.env.example` para `.env` na raiz do projeto e preencha as variáveis
    com **Project URL** e **Publishable/anon key** (em
    **Project Settings > API**):
@@ -26,7 +26,10 @@ controle financeiro.
    VITE_SUPABASE_ANON_KEY=sua-chave-publica-do-supabase
    ```
 
-4. Instale e execute:
+4. Em **Authentication > Providers**, habilite o provider **Email**. Para
+   desenvolvimento, você pode desabilitar a confirmação de e-mail; em
+   produção, mantenha-a habilitada e configure o SMTP do projeto.
+5. Instale e execute:
 
    ```bash
    npm install
@@ -35,25 +38,32 @@ controle financeiro.
 
    Para validar uma build de produção, execute `npm run build`.
 
-### Estratégia de tenant no MVP
+### Autenticação e isolamento de dados
 
-O MVP ainda não pressupõe autenticação. Quando as variáveis Supabase estão
-configuradas, o app usa o tenant fixo
-`00000000-0000-0000-0000-000000000001` e as políticas RLS permitem que apenas
-esse tenant seja lido ou alterado pela chave pública. Isso permite testar o
-fluxo sem login, mas **não deve ser usado com dados reais**. Antes de publicar,
-adicione autenticação e troque as políticas da migration por políticas baseadas
-em `auth.uid()` e numa tabela de membros.
+O app exige uma sessão Supabase antes de renderizar o dashboard. O login e o
+cadastro usam e-mail/senha, e o botão **Sair** encerra a sessão. Após um
+cadastro, o trigger `public.handle_new_user` (criado pela migration) usa
+`SECURITY DEFINER` para criar uma barbearia pessoal e uma linha em
+`barber_shop_members`; o nome informado no cadastro é salvo como nome da
+barbearia. Assim, o usuário não precisa receber permissões elevadas no
+frontend.
 
-Se as variáveis não estiverem configuradas, o app usa os dados estáticos locais
-do protótipo e mantém os formulários funcionais apenas na sessão atual. Quando
-o Supabase está configurado, erros de rede, schema ou RLS aparecem na interface
-com uma ação para tentar novamente; eles não são silenciosamente ignorados.
+O app resolve o `tenant_id` consultando a associação do usuário autenticado em
+`barber_shop_members`. Todas as consultas e inserções usam esse tenant, e as
+políticas RLS verificam `auth.uid()` para cada tabela. A chave usada no
+frontend é somente a chave pública (anon/publishable); nunca coloque a
+`service_role` key em `.env` do Vite, no navegador ou em secrets expostos.
+
+Se a migration já tiver sido aplicada em um projeto, execute a versão
+atualizada no SQL Editor (ou crie uma nova migration equivalente) antes de
+testar o cadastro. Usuários criados antes do trigger precisam receber uma
+linha em `barber_shop_members` por um processo administrativo seguro; não
+insira essa associação pelo cliente.
 
 ## Funcionalidades conectadas
 
 - Carregamento de appointments, clientes, serviços e movimentações financeiras
-  do tenant demo.
+  da barbearia vinculada ao usuário autenticado.
 - Criação de agendamentos, clientes, serviços e receitas/despesas.
 - Métricas do dashboard e financeiro derivadas dos dados carregados.
 - Busca de clientes e índices para as consultas mais frequentes.
