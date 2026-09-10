@@ -15,6 +15,8 @@ import {
   MoreHorizontal,
   UserPlus,
   Trash2,
+  Download,
+  CalendarRange,
 } from 'lucide-react';
 import {
   createAppointmentRecord,
@@ -157,6 +159,14 @@ function startOfWeek(dateValue) {
 
 function formatAgendaDate(dateValue, options) {
   return new Intl.DateTimeFormat('pt-BR', options).format(new Date(`${dateValue}T12:00:00`));
+}
+
+function monthRange(dateValue) {
+  const firstDay = new Date(`${dateValue.slice(0, 7)}-01T12:00:00`);
+  return {
+    start: `${dateValue.slice(0, 7)}-01`,
+    end: dateKey(new Date(firstDay.getFullYear(), firstDay.getMonth() + 1, 0, 12)),
+  };
 }
 
 function authErrorMessage(error, fallback) {
@@ -785,10 +795,119 @@ function Services({ data, onNew }) {
 }
 
 function Finance({ data, onNew }) {
-  const monthFinance = data.finance.filter((item) => item.date?.startsWith(REPORT_DATE.slice(0, 7)));
-  const revenue = monthFinance.filter((item) => item.type === 'income').reduce((sum, item) => sum + item.amountCents, 0);
-  const expenses = monthFinance.filter((item) => item.type === 'expense').reduce((sum, item) => sum + item.amountCents, 0);
-  return <section className="content"><div className="page-head"><div><h2>Financeiro</h2><p>Acompanhe receitas e resultados da sua barbearia.</p></div><button className="primary" onClick={onNew}><Plus size={18}/> Lançar movimentação</button></div><div className="stats"><Stat icon={TrendingUp} label="Receita no mês" value={money(revenue)} detail="Entradas do mês" positive/><Stat icon={WalletCards} label="Despesas" value={money(expenses)} detail={`${monthFinance.filter((item) => item.type === 'expense').length} lançamentos`}/><Stat icon={WalletCards} label="Resultado" value={money(revenue - expenses)} detail="Receitas menos despesas" positive/></div><div className="panel"><div className="panel-head"><div><h3>Movimentações recentes</h3><p>Setembro de 2026</p></div></div>{data.finance.map((movement) => <div className="finance-row" key={movement.id}><span>{movement.dateLabel} · {movement.description}</span><b className={movement.type === 'expense' ? 'expense' : ''}>{movement.type === 'expense' ? '- ' : '+ '}{money(movement.amountCents)}</b></div>)}{!data.finance.length && <div className="empty-state">Nenhuma movimentação cadastrada.</div>}</div></section>;
+  const [preset, setPreset] = useState('month');
+  const [customRange, setCustomRange] = useState(() => monthRange(REPORT_DATE));
+  const [rangeError, setRangeError] = useState('');
+
+  const range = preset === 'month'
+    ? monthRange(REPORT_DATE)
+    : preset === 'current'
+      ? { start: REPORT_DATE, end: REPORT_DATE }
+      : customRange;
+  const filteredFinance = data.finance.filter((item) => item.date >= range.start && item.date <= range.end);
+  const revenue = filteredFinance
+    .filter((item) => item.type === 'income')
+    .reduce((sum, item) => sum + item.amountCents, 0);
+  const expenses = filteredFinance
+    .filter((item) => item.type === 'expense')
+    .reduce((sum, item) => sum + item.amountCents, 0);
+  const net = revenue - expenses;
+  const chartMax = Math.max(revenue, expenses, 1);
+  const rangeLabel = preset === 'month'
+    ? formatAgendaDate(range.start, { month: 'long', year: 'numeric' })
+    : preset === 'current'
+      ? 'Hoje'
+      : range.start && range.end
+        ? `${formatAgendaDate(range.start, { day: '2-digit', month: '2-digit', year: 'numeric' })} até ${formatAgendaDate(range.end, { day: '2-digit', month: '2-digit', year: 'numeric' })}`
+        : 'Período personalizado';
+
+  const updateCustomRange = (field) => (event) => {
+    const nextRange = { ...customRange, [field]: event.target.value };
+    setCustomRange(nextRange);
+    setRangeError(!nextRange.start || !nextRange.end
+      ? 'Informe as duas datas do período.'
+      : nextRange.start > nextRange.end
+        ? 'A data inicial deve ser anterior ou igual à data final.'
+        : '');
+  };
+
+  const exportCsv = () => {
+    const header = ['Data', 'Tipo', 'Descrição', 'Valor'];
+    const rows = filteredFinance.map((movement) => [
+      movement.dateLabel,
+      movement.type === 'income' ? 'Receita' : 'Despesa',
+      movement.description,
+      (movement.amountCents / 100).toFixed(2).replace('.', ','),
+    ]);
+    const csv = [header, ...rows]
+      .map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(';'))
+      .join('\r\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `relatorio-financeiro-${range.start}-${range.end}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <section className="content">
+      <div className="page-head">
+        <div><h2>Financeiro</h2><p>Acompanhe receitas e resultados da sua barbearia.</p></div>
+        <button className="primary" onClick={onNew}><Plus size={18}/> Lançar movimentação</button>
+      </div>
+      <div className="finance-filters panel">
+        <div className="panel-head">
+          <div><h3>Período do relatório</h3><p>Filtre os lançamentos por data.</p></div>
+          <CalendarRange size={19} className="team-heading-icon" />
+        </div>
+        <div className="finance-filter-buttons" role="group" aria-label="Período do relatório">
+          <button className={preset === 'month' ? 'selected' : ''} onClick={() => { setPreset('month'); setRangeError(''); }}>Mês atual</button>
+          <button className={preset === 'current' ? 'selected' : ''} onClick={() => { setPreset('current'); setRangeError(''); }}>Hoje</button>
+          <button className={preset === 'custom' ? 'selected' : ''} onClick={() => setPreset('custom')}>Personalizado</button>
+        </div>
+        {preset === 'custom' && (
+          <div className="finance-date-fields">
+            <label>Data inicial<input type="date" value={customRange.start} onChange={updateCustomRange('start')} /></label>
+            <label>Data final<input type="date" value={customRange.end} onChange={updateCustomRange('end')} /></label>
+          </div>
+        )}
+        {rangeError && <p className="form-hint" role="alert">{rangeError}</p>}
+      </div>
+      <div className="stats">
+        <Stat icon={TrendingUp} label="Receitas" value={money(revenue)} detail={`${filteredFinance.filter((item) => item.type === 'income').length} lançamentos`} positive />
+        <Stat icon={WalletCards} label="Despesas" value={money(expenses)} detail={`${filteredFinance.filter((item) => item.type === 'expense').length} lançamentos`} />
+        <Stat icon={WalletCards} label="Resultado líquido" value={money(net)} detail="Receitas menos despesas" positive={net >= 0} />
+      </div>
+      <div className="finance-grid">
+        <div className="panel">
+          <div className="panel-head"><div><h3>Distribuição do período</h3><p>{rangeLabel}</p></div></div>
+          <div className="finance-chart" aria-label={`Gráfico de receitas e despesas: receitas ${money(revenue)}, despesas ${money(expenses)}`}>
+            <div className="chart-row"><span>Receitas</span><div className="chart-track"><svg viewBox="0 0 280 16" preserveAspectRatio="none"><rect width="280" height="16" rx="8" fill="#f0eee8" /><rect width={280 * revenue / chartMax} height="16" rx="8" fill="#6d9b78" /></svg></div><strong>{money(revenue)}</strong></div>
+            <div className="chart-row"><span>Despesas</span><div className="chart-track"><svg viewBox="0 0 280 16" preserveAspectRatio="none"><rect width="280" height="16" rx="8" fill="#f0eee8" /><rect width={280 * expenses / chartMax} height="16" rx="8" fill="#b87878" /></svg></div><strong>{money(expenses)}</strong></div>
+          </div>
+        </div>
+        <div className="panel finance-export-panel">
+          <div className="panel-head"><div><h3>Exportar relatório</h3><p>{filteredFinance.length} movimentação(ões) no período</p></div></div>
+          <button className="secondary export-button" onClick={exportCsv} disabled={Boolean(rangeError)}><Download size={16} /> Baixar CSV</button>
+          <p className="export-hint">O arquivo inclui data, tipo, descrição e valor dos lançamentos filtrados.</p>
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-head"><div><h3>Movimentações recentes</h3><p>{rangeLabel}</p></div></div>
+        {filteredFinance.map((movement) => (
+          <div className="finance-row" key={movement.id}>
+            <div><strong>{movement.description}</strong><span>{movement.dateLabel} · {movement.type === 'income' ? 'Receita' : 'Despesa'}</span></div>
+            <b className={movement.type === 'expense' ? 'expense' : 'positive'}>{movement.type === 'expense' ? '- ' : '+ '}{money(movement.amountCents)}</b>
+          </div>
+        ))}
+        {!filteredFinance.length && <div className="empty-state">Nenhuma movimentação encontrada neste período.</div>}
+      </div>
+    </section>
+  );
 }
 
 const roleLabels = {
@@ -1145,8 +1264,30 @@ function NewService({ saving, onClose, onSubmit }) {
 
 function NewFinance({ saving, onClose, onSubmit }) {
   const [form, setForm] = useState({ type: 'income', amount: '', description: '', date: dateInputDefault() });
-  const submit = (event) => { event.preventDefault(); onSubmit({ ...form, amountCents: Math.round(Number(form.amount.replace(',', '.')) * 100) }); };
-  return <Modal title="Lançar movimentação" description="Registre uma entrada ou despesa." onClose={onClose}><form onSubmit={submit}><label>Tipo<select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option value="income">Receita</option><option value="expense">Despesa</option></select></label><label>Descrição<input required value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Ex.: Corte masculino" /></label><div className="form-grid"><label>Valor (R$)<input required min="0.01" step="0.01" type="number" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} placeholder="80,00" /></label><label>Data<input required type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></label></div><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Salvando...' : 'Lançar'}</button></div></form></Modal>;
+  const [formError, setFormError] = useState('');
+  const submit = (event) => {
+    event.preventDefault();
+    setFormError('');
+    const amountCents = Math.round(Number(String(form.amount).replace(',', '.')) * 100);
+    const parsedDate = new Date(`${form.date}T12:00:00`);
+    const validDate = /^\d{4}-\d{2}-\d{2}$/.test(form.date)
+      && !Number.isNaN(parsedDate.getTime())
+      && dateKey(parsedDate) === form.date;
+    if (!form.description.trim()) {
+      setFormError('Informe uma descrição para a movimentação.');
+      return;
+    }
+    if (!Number.isSafeInteger(amountCents) || amountCents <= 0 || amountCents > 2147483647) {
+      setFormError('Informe um valor maior que zero.');
+      return;
+    }
+    if (!validDate) {
+      setFormError('Informe uma data válida.');
+      return;
+    }
+    onSubmit({ ...form, description: form.description.trim(), amountCents });
+  };
+  return <Modal title="Lançar movimentação" description="Registre uma entrada ou despesa." onClose={onClose}><form onSubmit={submit}><label>Tipo<select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })}><option value="income">Receita</option><option value="expense">Despesa</option></select></label><label>Descrição<input required value={form.description} onChange={(event) => { setForm({ ...form, description: event.target.value }); setFormError(''); }} placeholder="Ex.: Corte masculino" /></label><div className="form-grid"><label>Valor (R$)<input required min="0.01" step="0.01" type="number" value={form.amount} onChange={(event) => { setForm({ ...form, amount: event.target.value }); setFormError(''); }} placeholder="80,00" /></label><label>Data<input required type="date" value={form.date} onChange={(event) => { setForm({ ...form, date: event.target.value }); setFormError(''); }} /></label></div>{formError && <p className="form-hint" role="alert">{formError}</p>}<div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Salvando...' : 'Lançar'}</button></div></form></Modal>;
 }
 
 export default App;
