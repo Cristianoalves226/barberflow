@@ -20,9 +20,11 @@ import {
   createFinanceMovement,
   createServiceRecord,
   getAuthSession,
+  resetPasswordForEmail,
   signInWithPassword,
   signUpWithPassword,
   signOut,
+  updatePassword,
   isSupabaseConfigured,
   loadBarberFlowData,
   subscribeToAuthState,
@@ -121,8 +123,35 @@ const initials = (name) =>
 
 const dateInputDefault = () => new Date().toISOString().slice(0, 10);
 
+function authErrorMessage(error, fallback) {
+  const message = error?.message?.toLowerCase() || '';
+  if (message.includes('invalid login credentials')) {
+    return 'E-mail ou senha inválidos.';
+  }
+  if (message.includes('email not confirmed')) {
+    return 'Confirme seu e-mail antes de entrar.';
+  }
+  if (message.includes('user already registered')) {
+    return 'Este e-mail já está cadastrado. Tente entrar ou recuperar sua senha.';
+  }
+  if (message.includes('password should be at least')) {
+    return 'A senha deve ter pelo menos 6 caracteres.';
+  }
+  if (message.includes('same password')) {
+    return 'A nova senha precisa ser diferente da senha atual.';
+  }
+  if (message.includes('expired') || message.includes('invalid token')) {
+    return 'Este link de recuperação expirou ou não é mais válido. Solicite um novo link.';
+  }
+  if (message.includes('rate limit') || message.includes('too many requests')) {
+    return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
+  }
+  return fallback;
+}
+
 function App() {
   const [session, setSession] = useState(null);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
   const [authError, setAuthError] = useState('');
   const [active, setActive] = useState('Dashboard');
@@ -140,22 +169,29 @@ function App() {
     }
 
     let mounted = true;
+    let recoveryDetected = false;
+    const unsubscribe = subscribeToAuthState((event, nextSession) => {
+      if (!mounted) return;
+      setSession(nextSession);
+      if (event === 'PASSWORD_RECOVERY') {
+        recoveryDetected = true;
+        setPasswordRecovery(true);
+      }
+      if (event === 'SIGNED_OUT') setPasswordRecovery(false);
+      setAuthError('');
+      setError('');
+    });
+
     getAuthSession()
       .then((currentSession) => {
-        if (mounted) setSession(currentSession);
+        if (mounted && (currentSession || !recoveryDetected)) setSession(currentSession);
       })
       .catch((sessionError) => {
-        if (mounted) setAuthError(sessionError.message || 'Não foi possível verificar sua sessão.');
+        if (mounted) setAuthError(authErrorMessage(sessionError, 'Não foi possível verificar sua sessão. Tente novamente.'));
       })
       .finally(() => {
         if (mounted) setAuthLoading(false);
       });
-
-    const unsubscribe = subscribeToAuthState((nextSession) => {
-      setSession(nextSession);
-      setAuthError('');
-      setError('');
-    });
 
     return () => {
       mounted = false;
@@ -243,6 +279,10 @@ function App() {
     return <div className="auth-shell"><div className="loading-state">Verificando sua sessão...</div></div>;
   }
 
+  if (passwordRecovery) {
+    return <UpdatePasswordPanel onComplete={() => setPasswordRecovery(false)} />;
+  }
+
   if (!session) {
     return <AuthPanel error={authError} onError={setAuthError} />;
   }
@@ -265,7 +305,7 @@ function App() {
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setMenuOpen(!menuOpen)}><Menu size={22} /></button>
           <div><p className="eyebrow">QUARTA-FEIRA, 09 DE SETEMBRO</p><h1>{active}</h1></div>
-          <div className="top-actions"><button className="icon-btn"><Bell size={19} /><i /></button><div className="avatar">{initials(session.user.email || 'U')}</div><button className="logout-btn" onClick={() => signOut().catch((signOutError) => setError(signOutError.message))}>Sair</button></div>
+          <div className="top-actions"><button className="icon-btn"><Bell size={19} /><i /></button><div className="avatar">{initials(session.user.email || 'U')}</div><button className="logout-btn" onClick={() => signOut().catch((signOutError) => setError(authErrorMessage(signOutError, 'Não foi possível sair da conta. Tente novamente.')))}>Sair</button></div>
         </header>
         {error && <div className="error-banner" role="alert"><strong>Não foi possível concluir a operação.</strong><span>{error}</span><button onClick={refresh}>Tentar novamente</button></div>}
         {loading ? <div className="loading-state">Carregando dados da sua barbearia...</div> : renderContent()}
@@ -312,6 +352,13 @@ function AuthPanel({ configured = true, error = '', onError }) {
     setForm((current) => ({ ...current, [field]: event.target.value }));
   };
 
+  const switchMode = (nextMode) => {
+    setMode(nextMode);
+    setFormError('');
+    setNotice('');
+    onError?.('');
+  };
+
   const submit = async (event) => {
     event.preventDefault();
     setFormError('');
@@ -327,14 +374,22 @@ function AuthPanel({ configured = true, error = '', onError }) {
     try {
       if (mode === 'login') {
         await signInWithPassword(form);
-      } else {
+      } else if (mode === 'signup') {
         const result = await signUpWithPassword(form);
         if (!result.session) {
           setNotice('Cadastro realizado. Verifique seu e-mail para confirmar a conta antes de entrar.');
         }
+      } else {
+        await resetPasswordForEmail(form.email);
+        setNotice('Se o e-mail estiver cadastrado, enviaremos um link para redefinir sua senha. Verifique também a caixa de spam.');
       }
     } catch (authSubmitError) {
-      const message = authSubmitError.message || 'Não foi possível concluir a autenticação.';
+      const message = authErrorMessage(
+        authSubmitError,
+        mode === 'forgot'
+          ? 'Não foi possível enviar o link de recuperação. Tente novamente.'
+          : 'Não foi possível concluir a autenticação. Tente novamente.'
+      );
       setFormError(message);
       onError?.(message);
     } finally {
@@ -358,20 +413,74 @@ function AuthPanel({ configured = true, error = '', onError }) {
     <div className="auth-shell">
       <div className="auth-card">
         <div className="brand auth-brand"><span className="brand-mark">B</span><span>Barber<span>Flow</span></span></div>
-        <h1>{mode === 'login' ? 'Entre na sua conta' : 'Crie sua conta'}</h1>
-        <p className="auth-description">{mode === 'login' ? 'Acesse a gestão da sua barbearia.' : 'Sua conta receberá uma barbearia pessoal automaticamente.'}</p>
+        <h1>{mode === 'login' ? 'Entre na sua conta' : mode === 'signup' ? 'Crie sua conta' : 'Recupere sua senha'}</h1>
+        <p className="auth-description">
+          {mode === 'login'
+            ? 'Acesse a gestão da sua barbearia.'
+            : mode === 'signup'
+              ? 'Sua conta receberá uma barbearia pessoal automaticamente.'
+              : 'Informe seu e-mail e enviaremos um link para criar uma nova senha.'}
+        </p>
+        {mode === 'signup' && <p className="auth-helper">Depois do cadastro, confirme seu e-mail para liberar o acesso.</p>}
         {(formError || error) && <div className="auth-error" role="alert">{formError || error}</div>}
         {notice && <div className="auth-notice" role="status">{notice}</div>}
         <form onSubmit={submit} className="auth-form">
           {mode === 'signup' && <label>Nome da barbearia<input required value={form.shopName} onChange={update('shopName')} placeholder="Ex.: BarberFlow Centro" /></label>}
           <label>E-mail<input required type="email" autoComplete="email" value={form.email} onChange={update('email')} placeholder="voce@exemplo.com" /></label>
-          <label>Senha<input required minLength="6" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={update('password')} placeholder="Mínimo de 6 caracteres" /></label>
+          {mode !== 'forgot' && <label>Senha<input required minLength="6" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.password} onChange={update('password')} placeholder="Mínimo de 6 caracteres" /></label>}
           {mode === 'signup' && <label>Confirme a senha<input required minLength="6" type="password" autoComplete="new-password" value={form.passwordConfirm} onChange={update('passwordConfirm')} /></label>}
-          <button className="primary auth-submit" disabled={submitting}>{submitting ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Criar conta'}</button>
+          <button className="primary auth-submit" disabled={submitting}>{submitting ? 'Aguarde...' : mode === 'login' ? 'Entrar' : mode === 'signup' ? 'Criar conta' : 'Enviar link de recuperação'}</button>
         </form>
-        <button className="auth-switch" onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setFormError(''); setNotice(''); }}>
-          {mode === 'login' ? 'Ainda não tenho uma conta' : 'Já tenho uma conta'}
+        {mode === 'login' && <button type="button" className="auth-link" onClick={() => switchMode('forgot')}>Esqueci minha senha</button>}
+        <button type="button" className="auth-switch" onClick={() => switchMode(mode === 'login' ? 'signup' : 'login')}>
+          {mode === 'login' ? 'Ainda não tenho uma conta' : 'Voltar para entrar'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function UpdatePasswordPanel({ onComplete }) {
+  const [password, setPassword] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setError('');
+    setNotice('');
+    if (password !== passwordConfirm) {
+      setError('As senhas não conferem.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await updatePassword(password);
+      setNotice('Senha atualizada com sucesso. Agora você pode continuar para o painel.');
+    } catch (passwordError) {
+      setError(authErrorMessage(passwordError, 'Não foi possível atualizar sua senha. Solicite um novo link e tente novamente.'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="brand auth-brand"><span className="brand-mark">B</span><span>Barber<span>Flow</span></span></div>
+        <h1>Crie uma nova senha</h1>
+        <p className="auth-description">Escolha uma senha com pelo menos 6 caracteres para voltar a acessar sua conta.</p>
+        {error && <div className="auth-error" role="alert">{error}</div>}
+        {notice && <div className="auth-notice" role="status">{notice}</div>}
+        {!notice && <form onSubmit={submit} className="auth-form">
+          <label>Nova senha<input required minLength="6" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+          <label>Confirme a nova senha<input required minLength="6" type="password" autoComplete="new-password" value={passwordConfirm} onChange={(event) => setPasswordConfirm(event.target.value)} /></label>
+          <button className="primary auth-submit" disabled={submitting}>{submitting ? 'Salvando...' : 'Atualizar senha'}</button>
+        </form>}
+        {notice && <button type="button" className="auth-switch" onClick={onComplete}>Continuar para o painel</button>}
       </div>
     </div>
   );

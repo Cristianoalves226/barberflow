@@ -14,6 +14,25 @@ export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
+export function getAuthRedirectUrl() {
+  if (typeof window === 'undefined') return undefined;
+
+  const configuredBasePath = import.meta.env.BASE_URL;
+  const currentPath = window.location.pathname || '/';
+  const lastSegment = currentPath.slice(currentPath.lastIndexOf('/') + 1);
+  const currentDirectory = currentPath.endsWith('/')
+    ? currentPath
+    : /\.[^/]+$/.test(lastSegment)
+      ? `${currentPath.slice(0, currentPath.lastIndexOf('/') + 1) || '/'}`
+      : `${currentPath}/`;
+  const basePath =
+    configuredBasePath && configuredBasePath !== '/'
+      ? configuredBasePath
+      : currentDirectory || '/';
+
+  return new URL(basePath, window.location.origin).toString();
+}
+
 export async function getAuthSession() {
   const { data, error } = await requireClient().auth.getSession();
   throwIfError(error);
@@ -24,8 +43,8 @@ export function subscribeToAuthState(callback) {
   if (!supabase) return () => {};
   const {
     data: { subscription },
-  } = supabase.auth.onAuthStateChange((_event, session) => callback(session));
-  return () => subscription.unsubscribe();
+  } = supabase.auth.onAuthStateChange((event, session) => callback(event, session));
+  return () => subscription?.unsubscribe();
 }
 
 export async function signInWithPassword({ email, password }) {
@@ -49,6 +68,19 @@ export async function signUpWithPassword({ email, password, shopName }) {
   });
   throwIfError(error);
   return data;
+}
+
+export async function resetPasswordForEmail(email) {
+  const { error } = await requireClient().auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: getAuthRedirectUrl(),
+  });
+  throwIfError(error);
+}
+
+export async function updatePassword(password) {
+  const { data, error } = await requireClient().auth.updateUser({ password });
+  throwIfError(error);
+  return data.user;
 }
 
 export async function signOut() {
