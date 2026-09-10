@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import {
   createAppointmentRecord,
+  updateAppointmentRecord,
+  cancelAppointmentRecord,
   createClientRecord,
   createFinanceMovement,
   createServiceRecord,
@@ -134,6 +136,26 @@ const initials = (name) =>
     .join('');
 
 const dateInputDefault = () => new Date().toISOString().slice(0, 10);
+
+const dateKey = (date) => date.toISOString().slice(0, 10);
+
+function shiftDate(dateValue, amount, unit = 'day') {
+  const date = new Date(`${dateValue}T12:00:00`);
+  if (unit === 'month') date.setMonth(date.getMonth() + amount);
+  else date.setDate(date.getDate() + amount);
+  return dateKey(date);
+}
+
+function startOfWeek(dateValue) {
+  const date = new Date(`${dateValue}T12:00:00`);
+  const day = date.getDay();
+  date.setDate(date.getDate() - (day === 0 ? 6 : day - 1));
+  return dateKey(date);
+}
+
+function formatAgendaDate(dateValue, options) {
+  return new Intl.DateTimeFormat('pt-BR', options).format(new Date(`${dateValue}T12:00:00`));
+}
 
 function authErrorMessage(error, fallback) {
   const message = error?.message?.toLowerCase() || '';
@@ -258,7 +280,10 @@ function App() {
     setSaving(true);
     setError('');
     try {
-      if (type === 'appointment') await createAppointmentRecord(values);
+      if (type === 'appointment') {
+        if (values.id) await updateAppointmentRecord(values);
+        else await createAppointmentRecord(values);
+      }
       if (type === 'client') await createClientRecord(values);
       if (type === 'service') await createServiceRecord(values);
       if (type === 'finance') await createFinanceMovement(values);
@@ -285,7 +310,24 @@ function App() {
     }
   };
 
-  const openNewAppointment = () => setModal('appointment');
+  const openNewAppointment = () => setModal({ type: 'appointment', appointment: null });
+  const openEditAppointment = (appointment) =>
+    setModal({ type: 'appointment', appointment });
+
+  const cancelAppointment = async ({ id: appointmentId, reason = '' }) => {
+    if (!window.confirm('Cancelar este agendamento?')) return;
+    setSaving(true);
+    setError('');
+    try {
+      await cancelAppointmentRecord({ id: appointmentId, reason });
+      await refresh();
+      setModal(null);
+    } catch (cancelError) {
+      setError(cancelError.message || 'Não foi possível cancelar o agendamento.');
+    } finally {
+      setSaving(false);
+    }
+  };
   const nav = [
     ['Dashboard', LayoutDashboard],
     ['Agenda', CalendarDays],
@@ -296,7 +338,15 @@ function App() {
   ];
 
   const renderContent = () => {
-    if (active === 'Agenda') return <Agenda data={derivedData} onNew={openNewAppointment} />;
+    if (active === 'Agenda') {
+      return (
+        <Agenda
+          data={derivedData}
+          onNew={openNewAppointment}
+          onEdit={openEditAppointment}
+        />
+      );
+    }
     if (active === 'Clientes') return <Clients data={derivedData} onNew={() => setModal('client')} />;
     if (active === 'Serviços') return <Services data={derivedData} onNew={() => setModal('service')} />;
     if (active === 'Financeiro') return <Finance data={derivedData} onNew={() => setModal('finance')} />;
@@ -355,7 +405,17 @@ function App() {
         {loading ? <div className="loading-state">Carregando dados da sua barbearia...</div> : renderContent()}
       </main>
 
-      {modal === 'appointment' && <NewAppointment data={derivedData} saving={saving} onClose={() => setModal(null)} onSubmit={(values) => save('appointment', values)} />}
+      {modal?.type === 'appointment' && (
+        <AppointmentModal
+          data={derivedData}
+          barbers={team.members}
+          appointment={modal.appointment}
+          saving={saving}
+          onClose={() => setModal(null)}
+          onCancel={cancelAppointment}
+          onSubmit={(values) => save('appointment', values)}
+        />
+      )}
       {modal === 'client' && <NewClient saving={saving} onClose={() => setModal(null)} onSubmit={(values) => save('client', values)} />}
       {modal === 'service' && <NewService saving={saving} onClose={() => setModal(null)} onSubmit={(values) => save('service', values)} />}
       {modal === 'finance' && <NewFinance saving={saving} onClose={() => setModal(null)} onSubmit={(values) => save('finance', values)} />}
@@ -552,14 +612,73 @@ function Dashboard({ data, onNew }) {
 
 function Stat({ icon: Icon, label, value, detail, positive }) { return <div className="stat"><div className="stat-icon"><Icon size={20}/></div><div><span>{label}</span><strong>{value}</strong><small className={positive ? 'positive' : ''}>{detail}</small></div></div>; }
 
-function Agenda({ data, onNew }) {
-  return <section className="content"><div className="page-head"><div><h2>Agenda</h2><p>Organize os atendimentos da sua equipe.</p></div><button className="primary" onClick={onNew}><Plus size={18}/> Novo agendamento</button></div><div className="calendar-bar"><button>‹</button><strong>Hoje, 09 de setembro</strong><button>›</button><div className="view-switch"><button className="selected">Dia</button><button>Semana</button><button>Mês</button></div></div><div className="panel"><AppointmentRows appointments={data.appointments} /></div></section>;
+function Agenda({ data, onNew, onEdit }) {
+  const [view, setView] = useState('day');
+  const [selectedDate, setSelectedDate] = useState(REPORT_DATE);
+  const weekStart = startOfWeek(selectedDate);
+  const monthStart = `${selectedDate.slice(0, 7)}-01`;
+  const visibleAppointments = data.appointments.filter((appointment) => {
+    if (view === 'day') return appointment.date === selectedDate;
+    if (view === 'week') {
+      const weekEnd = shiftDate(weekStart, 6);
+      return appointment.date >= weekStart && appointment.date <= weekEnd;
+    }
+    return appointment.date.startsWith(selectedDate.slice(0, 7));
+  });
+  const heading =
+    view === 'day'
+      ? formatAgendaDate(selectedDate, { weekday: 'long', day: 'numeric', month: 'long' })
+      : view === 'week'
+        ? `${formatAgendaDate(weekStart, { day: 'numeric', month: 'short' })} – ${formatAgendaDate(shiftDate(weekStart, 6), { day: 'numeric', month: 'short', year: 'numeric' })}`
+        : formatAgendaDate(monthStart, { month: 'long', year: 'numeric' });
+  const viewStep = view === 'month' ? 1 : view === 'week' ? 7 : 1;
+  return (
+    <section className="content">
+      <div className="page-head">
+        <div><h2>Agenda</h2><p>Organize os atendimentos da sua equipe.</p></div>
+        <button className="primary" onClick={onNew}><Plus size={18}/> Novo agendamento</button>
+      </div>
+      <div className="calendar-bar">
+        <button aria-label="Período anterior" onClick={() => setSelectedDate(shiftDate(selectedDate, -viewStep, view === 'month' ? 'month' : 'day'))}>‹</button>
+        <strong>{heading}</strong>
+        <button aria-label="Próximo período" onClick={() => setSelectedDate(shiftDate(selectedDate, viewStep, view === 'month' ? 'month' : 'day'))}>›</button>
+        <button className="secondary calendar-today" onClick={() => setSelectedDate(REPORT_DATE)}>Hoje</button>
+        <div className="view-switch" aria-label="Visualização da agenda">
+          {['day', 'week', 'month'].map((option) => (
+            <button key={option} className={view === option ? 'selected' : ''} onClick={() => setView(option)}>
+              {option === 'day' ? 'Dia' : option === 'week' ? 'Semana' : 'Mês'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div><h3>{view === 'day' ? 'Atendimentos do dia' : 'Atendimentos no período'}</h3><p>{visibleAppointments.length} agendamento(s)</p></div>
+        </div>
+        <AppointmentRows appointments={visibleAppointments} onEdit={onEdit} />
+      </div>
+      {view !== 'day' && (
+        <p className="agenda-hint">Use os botões Dia, Semana e Mês para filtrar a agenda. Clique em um atendimento para editar ou cancelar.</p>
+      )}
+    </section>
+  );
 }
 
-function AppointmentRows({ appointments, compact = false }) {
+function AppointmentRows({ appointments, compact = false, onEdit }) {
   const visible = appointments.slice(0, compact ? 4 : appointments.length);
   if (!visible.length) return <div className="empty-state">Nenhum agendamento encontrado.</div>;
-  return <div className="appointments">{visible.map((appointment) => <div className="appointment" key={appointment.id}><div className="time">{appointment.time}</div><div className="appointment-main"><div className="client-avatar">{initials(appointment.client)}</div><div><strong>{appointment.client}</strong><span>{appointment.service} · {appointment.barber}</span></div></div><span className={`status ${appointment.status.toLowerCase().replaceAll(' ','-')}`}>{appointment.status}</span><button className="more"><MoreHorizontal size={18}/></button></div>)}</div>;
+  return (
+    <div className="appointments">
+      {visible.map((appointment) => (
+        <div className={`appointment ${onEdit ? 'appointment-clickable' : ''}`} key={appointment.id} onClick={() => onEdit?.(appointment)}>
+          <div className="time">{appointment.time}</div>
+          <div className="appointment-main"><div className="client-avatar">{initials(appointment.client)}</div><div><strong>{appointment.client}</strong><span>{appointment.service} · {appointment.barber}</span></div></div>
+          <span className={`status ${appointment.statusKey || appointment.status.toLowerCase().replaceAll(' ', '-')}`}>{appointment.status}</span>
+          {onEdit ? <button className="more" onClick={(event) => { event.stopPropagation(); onEdit(appointment); }} aria-label={`Editar agendamento de ${appointment.client}`}><MoreHorizontal size={18}/></button> : <button className="more"><MoreHorizontal size={18}/></button>}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function Clients({ data, onNew }) {
@@ -748,10 +867,74 @@ function Modal({ title, description, onClose, children }) {
   return <div className="modal-backdrop" onClick={onClose}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>{title}</h2><p>{description}</p></div><button onClick={onClose}>×</button></div>{children}</div></div>;
 }
 
-function NewAppointment({ data, saving, onClose, onSubmit }) {
-  const [form, setForm] = useState({ clientId: data.clients[0]?.id || '', serviceId: data.services[0]?.id || '', date: dateInputDefault(), time: '16:00', barber: 'João' });
-  const update = (field) => (event) => setForm({ ...form, [field]: event.target.value });
-  return <Modal title="Novo agendamento" description="Cadastre um novo atendimento." onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}><label>Cliente<select required value={form.clientId} onChange={update('clientId')}>{data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>Serviço<select required value={form.serviceId} onChange={update('serviceId')}>{data.services.map((service) => <option key={service.id} value={service.id}>{service.name} — {service.price}</option>)}</select></label><div className="form-grid"><label>Data<input required type="date" value={form.date} onChange={update('date')} /></label><label>Horário<input required type="time" value={form.time} onChange={update('time')} /></label></div><label>Barbeiro<input required value={form.barber} onChange={update('barber')} /></label>{(!data.clients.length || !data.services.length) && <p className="form-hint">Cadastre pelo menos um cliente e um serviço antes de agendar.</p>}<div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={saving || !data.clients.length || !data.services.length}>{saving ? 'Salvando...' : 'Agendar'}</button></div></form></Modal>;
+function AppointmentModal({ data, barbers = [], appointment, saving, onClose, onCancel, onSubmit }) {
+  const [form, setForm] = useState({
+    id: appointment?.id,
+    clientId: appointment?.clientId || data.clients[0]?.id || '',
+    serviceId: appointment?.serviceId || data.services[0]?.id || '',
+    date: appointment?.date || dateInputDefault(),
+    time: appointment?.time || '16:00',
+    barber: appointment?.barber || barbers[0]?.email || '',
+    status: appointment?.statusKey || 'scheduled',
+    notes: appointment?.notes || '',
+  });
+  const [cancellationReason, setCancellationReason] = useState('');
+  const update = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
+  const barberOptions = [...new Set([
+    ...barbers.map((member) => member.email),
+    ...(form.barber ? [form.barber] : []),
+  ].filter(Boolean))];
+  const editing = Boolean(appointment);
+  const submit = (event) => {
+    event.preventDefault();
+    onSubmit(form);
+  };
+  return (
+    <Modal
+      title={editing ? 'Editar agendamento' : 'Novo agendamento'}
+      description={editing ? 'Atualize o atendimento ou altere seu status.' : 'Cadastre um novo atendimento.'}
+      onClose={onClose}
+    >
+      <form onSubmit={submit}>
+        <label>Cliente<select required value={form.clientId} onChange={update('clientId')}>{data.clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
+        <label>Serviço<select required value={form.serviceId} onChange={update('serviceId')}>{data.services.map((service) => <option key={service.id} value={service.id}>{service.name} — {service.price}</option>)}</select></label>
+        <div className="form-grid">
+          <label>Data<input required type="date" value={form.date} onChange={update('date')} /></label>
+          <label>Horário<input required type="time" value={form.time} onChange={update('time')} /></label>
+        </div>
+        <label>Barbeiro
+          {barberOptions.length ? (
+            <select required value={form.barber} onChange={update('barber')}>
+              {barberOptions.map((barber) => <option key={barber} value={barber}>{barber}</option>)}
+            </select>
+          ) : (
+            <input required value={form.barber} onChange={update('barber')} placeholder="Nome do barbeiro" />
+          )}
+        </label>
+        {editing && (
+          <label>Status
+            <select value={form.status} onChange={update('status')}>
+              <option value="scheduled">Agendado</option>
+              <option value="confirmed">Confirmado</option>
+              <option value="in_progress">Em atendimento</option>
+              <option value="completed">Concluído</option>
+              <option value="cancelled">Cancelado</option>
+            </select>
+          </label>
+        )}
+        <label>Observações<textarea value={form.notes} onChange={update('notes')} placeholder="Opcional" rows="3" /></label>
+        {editing && (
+          <div className="cancel-appointment">
+            <label>Motivo do cancelamento (opcional)<input value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="Ex.: cliente solicitou" /></label>
+            <button type="button" className="danger-button" disabled={saving} onClick={() => onCancel({ id: appointment.id, reason: cancellationReason })}>Cancelar agendamento</button>
+          </div>
+        )}
+        {(!data.clients.length || !data.services.length) && <p className="form-hint">Cadastre pelo menos um cliente e um serviço antes de agendar.</p>}
+        <p className="form-hint appointment-conflict-hint">O sistema impede dois atendimentos do mesmo barbeiro no mesmo horário.</p>
+        <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Fechar</button><button className="primary" disabled={saving || !data.clients.length || !data.services.length}>{saving ? 'Salvando...' : editing ? 'Salvar alterações' : 'Agendar'}</button></div>
+      </form>
+    </Modal>
+  );
 }
 
 function NewClient({ saving, onClose, onSubmit }) {

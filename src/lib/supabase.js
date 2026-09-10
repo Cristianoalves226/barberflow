@@ -105,6 +105,19 @@ const timeLabel = (date) =>
     minute: '2-digit',
   }).format(new Date(date));
 
+const dateKeyFromTimestamp = (timestamp) => {
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).formatToParts(new Date(timestamp));
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
+const appointmentTimestamp = (date, time) =>
+  new Date(`${date}T${time}:00`).toISOString();
+
 const statusLabels = {
   scheduled: 'Agendado',
   confirmed: 'Confirmado',
@@ -124,6 +137,19 @@ function throwIfError(error) {
   if (error) {
     throw new Error(`Supabase: ${error.message}`);
   }
+}
+
+function throwAppointmentError(error) {
+  if (!error) return;
+  if (
+    error.code === '23P01' ||
+    error.message?.includes('appointments_active_barber_no_overlap')
+  ) {
+    throw new Error(
+      'Conflito de horário: este barbeiro já possui um atendimento nesse período. Escolha outro horário ou barbeiro.'
+    );
+  }
+  throwIfError(error);
 }
 
 async function getCurrentMembership() {
@@ -216,7 +242,7 @@ export async function loadBarberFlowData() {
       client
         .from('appointments')
         .select(
-          'id, client_id, service_id, barber_name, starts_at, status, clients(name), services(name, price_cents)'
+          'id, client_id, service_id, barber_name, starts_at, ends_at, status, notes, cancelled_at, cancellation_reason, clients(name), services(name, price_cents)'
         )
         .eq('tenant_id', tenantId)
         .order('starts_at', { ascending: true }),
@@ -251,7 +277,7 @@ export async function loadBarberFlowData() {
   return {
     appointments: appointmentsResult.data.map((appointment) => ({
       id: appointment.id,
-      date: appointment.starts_at.slice(0, 10),
+      date: dateKeyFromTimestamp(appointment.starts_at),
       time: timeLabel(appointment.starts_at),
       client: appointment.clients?.name || 'Cliente removido',
       clientId: appointment.client_id,
@@ -261,6 +287,10 @@ export async function loadBarberFlowData() {
       barber: appointment.barber_name,
       status: statusLabels[appointment.status] || appointment.status,
       statusKey: appointment.status,
+      endsAt: appointment.ends_at,
+      notes: appointment.notes || '',
+      cancelledAt: appointment.cancelled_at,
+      cancellationReason: appointment.cancellation_reason || '',
     })),
     clients: clientsResult.data.map((clientRow) => ({
       id: clientRow.id,
@@ -306,6 +336,51 @@ export async function createClientRecord({ name, phone }) {
   return data;
 }
 
+export async function updateAppointmentRecord({
+  id,
+  clientId,
+  serviceId,
+  date,
+  time,
+  barber,
+  status,
+  notes,
+}) {
+  const tenantId = await getCurrentTenantId();
+  const { data, error } = await requireClient()
+    .from('appointments')
+    .update({
+      client_id: clientId,
+      service_id: serviceId,
+      barber_name: barber.trim(),
+      starts_at: appointmentTimestamp(date, time),
+      status,
+      notes: notes?.trim() || null,
+    })
+    .eq('id', id)
+    .eq('tenant_id', tenantId)
+    .select('id')
+    .single();
+  throwAppointmentError(error);
+  return data;
+}
+
+export async function cancelAppointmentRecord({ id, reason = '' }) {
+  const tenantId = await getCurrentTenantId();
+  const { data, error } = await requireClient()
+    .from('appointments')
+    .update({
+      status: 'cancelled',
+      cancellation_reason: reason.trim() || null,
+    })
+    .eq('id', id)
+    .eq('tenant_id', tenantId)
+    .select('id')
+    .single();
+  throwAppointmentError(error);
+  return data;
+}
+
 export async function createServiceRecord({ name, durationMinutes, priceCents }) {
   const tenantId = await getCurrentTenantId();
   const { data, error } = await requireClient()
@@ -337,12 +412,12 @@ export async function createAppointmentRecord({
       client_id: clientId,
       service_id: serviceId,
       barber_name: barber.trim(),
-      starts_at: `${date}T${time}:00`,
+      starts_at: appointmentTimestamp(date, time),
       status: 'scheduled',
     })
     .select('id')
     .single();
-  throwIfError(error);
+  throwAppointmentError(error);
   return data;
 }
 
