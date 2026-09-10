@@ -12,11 +12,15 @@ controle financeiro.
 ## Configuração do Supabase
 
 1. Crie um projeto em [supabase.com](https://supabase.com).
-2. No painel do projeto, abra **SQL Editor**, crie uma query e cole todo o
-   conteúdo de
-   `supabase/migrations/20260909180000_barberflow_mvp.sql`. Execute a query.
-   Ela cria as tabelas, relacionamentos, índices, triggers de timestamp, RLS e
-   o vínculo seguro entre usuários e barbearias.
+2. No painel do projeto, abra **SQL Editor**, crie uma query e execute, nesta
+   ordem, as migrations
+   `supabase/migrations/20260909180000_barberflow_mvp.sql` e
+   `supabase/migrations/20260909200000_barberflow_team_management.sql`.
+   A primeira cria as tabelas, relacionamentos, índices, triggers de timestamp,
+   RLS e o vínculo seguro entre usuários e barbearias. A segunda adiciona
+   membros, funções e solicitações de convite. Se a primeira já foi aplicada,
+   execute somente a segunda; ela foi escrita para ser aplicada com segurança
+   sobre o schema existente.
 3. Copie `.env.example` para `.env` na raiz do projeto e preencha as variáveis
    com **Project URL** e **Publishable/anon key** (em
    **Project Settings > API**):
@@ -69,6 +73,90 @@ atualizada no SQL Editor (ou crie uma nova migration equivalente) antes de
 testar o cadastro. Usuários criados antes do trigger precisam receber uma
 linha em `barber_shop_members` por um processo administrativo seguro; não
 insira essa associação pelo cliente.
+
+### Equipe, funções e convites
+
+A tela **Configurações > Equipe** usa as funções `owner`, `manager` e
+`barber`. Proprietários e gerentes podem consultar a equipe, criar solicitações
+de convite, alterar a função (barbeiro/gerente) e remover membros. Barbeiros
+somente consultam a equipe. As alterações administrativas passam por funções
+SQL `SECURITY DEFINER` com validação de `auth.uid()`; não há `service_role` no
+frontend.
+
+Por segurança, o navegador não consulta `auth.users` por e-mail e não tenta
+enviar convites com privilégios administrativos. O botão **Criar convite**
+grava uma solicitação pendente em `team_invitations`. Para concluir uma
+solicitação no MVP:
+
+1. Se o convidado ainda não tiver conta, ele deve criar uma conta no
+   BarberFlow usando o mesmo e-mail (confirmação de e-mail segue as regras do
+   provedor). Quando existe exatamente um convite pendente, a migration
+   associa a nova conta diretamente ao tenant e marca o convite como
+   concluído.
+2. Para um e-mail que já tinha conta quando a migration foi aplicada (ou para
+   convites ambíguos), um administrador do projeto abre o **SQL Editor** do
+   Supabase e executa o bloco abaixo, substituindo o e-mail. Execute-o apenas
+   como administrador do projeto, nunca pelo cliente:
+
+   ```sql
+   do $$
+   declare
+     invitation_row public.team_invitations%rowtype;
+     invited_user_id uuid;
+   begin
+     select * into invitation_row
+     from public.team_invitations
+     where lower(email) = lower('barbeiro@exemplo.com')
+       and status = 'pending'
+       and expires_at > now()
+     order by created_at desc
+     limit 1;
+
+     if invitation_row.id is null then
+       raise exception 'Convite pendente não encontrado ou expirado';
+     end if;
+
+     select id into invited_user_id
+     from auth.users
+     where lower(email) = lower(invitation_row.email)
+     limit 1;
+
+     if invited_user_id is null then
+       raise exception 'O convidado ainda não criou a conta';
+     end if;
+
+     -- Cada conta tem uma única associação no schema atual; a operação
+     -- transfere a associação existente para o tenant do convite.
+     update public.barber_shop_members
+     set tenant_id = invitation_row.tenant_id, role = invitation_row.role
+     where user_id = invited_user_id;
+
+     if not found then
+       insert into public.barber_shop_members (tenant_id, user_id, role)
+       values (invitation_row.tenant_id, invited_user_id, invitation_row.role);
+     end if;
+
+     update public.team_invitations
+     set status = 'accepted', accepted_at = now()
+     where id = invitation_row.id;
+   end $$;
+   ```
+
+   O bloco deve ser executado com uma conexão administrativa do Supabase; não
+   copie a `service_role` para `.env`, para o navegador ou para o GitHub.
+3. Depois de o convidado entrar novamente, a equipe aparecerá no tenant
+   correto. Para automatizar a conclusão administrativa de contas existentes,
+   encapsule o mesmo processo em uma Supabase Edge Function que valide o
+   JWT/e-mail do convidado e use `SUPABASE_SERVICE_ROLE_KEY` somente como
+   secret da função. A função não deve aceitar `tenant_id`, `user_id` ou
+   `role` arbitrários do navegador: leia esses valores do convite pendente e
+   valide o e-mail autenticado.
+
+As policies de RLS permitem que qualquer membro veja a própria equipe, mas
+somente `owner`/`manager` conseguem ver solicitações e executar as funções de
+convite, alteração e remoção. Os convites expiram em sete dias e a migration
+impede alterar/remover o proprietário ou promover alguém a proprietário pelo
+cliente.
 
 ## Funcionalidades conectadas
 
