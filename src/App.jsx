@@ -17,6 +17,9 @@ import {
   Trash2,
   Download,
   CalendarRange,
+  CreditCard,
+  ShieldCheck,
+  Check,
 } from 'lucide-react';
 import {
   createAppointmentRecord,
@@ -39,6 +42,8 @@ import {
   createTeamInvitation,
   updateTeamMemberRole,
   removeTeamMember,
+  loadBillingData,
+  requestSubscriptionPlan,
   subscribeToAuthState,
 } from './lib/supabase';
 
@@ -393,8 +398,8 @@ function App() {
     if (active === 'Financeiro') return <Finance data={derivedData} onNew={() => setModal('finance')} />;
     if (active === 'Configurações') {
       return (
-        <Team
-          data={team}
+        <Configuration
+          team={team}
           currentUserId={session.user.id}
           saving={saving}
           onInvite={(values) => manageTeam(() => createTeamInvitation(values))}
@@ -916,7 +921,178 @@ const roleLabels = {
   barber: 'Barbeiro',
 };
 
-function Team({ data, currentUserId, saving, onInvite, onRoleChange, onRemove }) {
+const billingStatusLabels = {
+  trialing: 'Em período de teste',
+  active: 'Ativo',
+  past_due: 'Pagamento pendente',
+  canceled: 'Cancelado',
+  incomplete: 'Incompleto',
+  pending: 'Aguardando checkout',
+};
+
+function billingDateLabel(value) {
+  return value
+    ? new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(value))
+    : '—';
+}
+
+function billingPriceLabel(plan) {
+  if (plan.priceCents === null || plan.priceCents === undefined) return 'Preço a definir';
+  return `${money(plan.priceCents)} / ${plan.billingInterval === 'year' ? 'ano' : 'mês'}`;
+}
+
+function Configuration({ team, currentUserId, saving, onInvite, onRoleChange, onRemove }) {
+  const [tab, setTab] = useState('team');
+  const [billing, setBilling] = useState(null);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+    setBillingLoading(true);
+    setBillingError('');
+    loadBillingData()
+      .then((nextBilling) => {
+        if (mounted) setBilling(nextBilling);
+      })
+      .catch((loadError) => {
+        if (mounted) setBillingError(loadError.message || 'Não foi possível carregar os planos.');
+      })
+      .finally(() => {
+        if (mounted) setBillingLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const selectPlan = async (planCode) => {
+    setBillingError('');
+    try {
+      await requestSubscriptionPlan(planCode);
+      setBilling(await loadBillingData());
+    } catch (selectionError) {
+      setBillingError(selectionError.message || 'Não foi possível registrar a intenção do plano.');
+    }
+  };
+
+  return (
+    <section className="content">
+      <div className="page-head">
+        <div>
+          <h2>Configurações</h2>
+          <p>Gerencie a equipe e a assinatura da sua barbearia.</p>
+        </div>
+        <span className="role-badge">{roleLabels[team.role] || team.role}</span>
+      </div>
+      <div className="settings-tabs" role="tablist" aria-label="Configurações">
+        <button className={tab === 'team' ? 'selected' : ''} onClick={() => setTab('team')} role="tab" aria-selected={tab === 'team'}>
+          Equipe
+        </button>
+        <button className={tab === 'billing' ? 'selected' : ''} onClick={() => setTab('billing')} role="tab" aria-selected={tab === 'billing'}>
+          Plano / Assinatura
+        </button>
+      </div>
+      {tab === 'team' ? (
+        <Team
+          data={team}
+          currentUserId={currentUserId}
+          saving={saving}
+          embedded
+          onInvite={onInvite}
+          onRoleChange={onRoleChange}
+          onRemove={onRemove}
+        />
+      ) : (
+        <Billing
+          data={billing}
+          role={team.role}
+          loading={billingLoading}
+          error={billingError}
+          onSelectPlan={selectPlan}
+        />
+      )}
+    </section>
+  );
+}
+
+function Billing({ data, role, loading, error, onSelectPlan }) {
+  const canChangePlan = role === 'owner';
+  const subscription = data?.subscription;
+  const currentPlan = subscription?.plan;
+  const requestedPlan = data?.plans?.find((plan) => plan.id === subscription?.requestedPlanId);
+  const status = subscription?.status || 'pending';
+
+  if (loading) return <div className="panel billing-loading">Carregando dados da assinatura...</div>;
+
+  return (
+    <div className="billing-content">
+      <div className="billing-security-note">
+        <ShieldCheck size={19} />
+        <div>
+          <strong>Pagamentos protegidos por preparação segura</strong>
+          <p>Nenhuma cobrança é feita pelo navegador. O Mercado Pago só será conectado depois que as credenciais ficarem em uma Edge Function privada.</p>
+        </div>
+      </div>
+      {error && <div className="team-feedback error" role="alert">{error}</div>}
+      <div className="panel billing-current">
+        <div className="panel-head">
+          <div>
+            <h3>Plano atual</h3>
+            <p>{currentPlan ? currentPlan.description : 'A assinatura ainda será inicializada após a migration de billing.'}</p>
+          </div>
+          <span className={`billing-status ${status}`}>{billingStatusLabels[status] || status}</span>
+        </div>
+        <div className="billing-current-grid">
+          <div><span>Plano</span><strong>{currentPlan?.name || 'Ainda não definido'}</strong></div>
+          <div><span>Período de teste</span><strong>{subscription?.trialEndsAt ? `até ${billingDateLabel(subscription.trialEndsAt)}` : 'Não informado'}</strong></div>
+          <div><span>Próximo período</span><strong>{billingDateLabel(subscription?.currentPeriodEnd)}</strong></div>
+        </div>
+        {requestedPlan && requestedPlan.id !== currentPlan?.id && (
+          <p className="billing-request">Intenção registrada: <strong>{requestedPlan.name}</strong>. O checkout será liberado somente após a configuração segura do Mercado Pago.</p>
+        )}
+      </div>
+      <div className="billing-heading">
+        <div><h3>Escolha um plano</h3><p>Os preços abaixo são placeholders até a definição comercial.</p></div>
+        <CreditCard size={19} className="team-heading-icon" />
+      </div>
+      <div className="billing-plans">
+        {(data?.plans || []).map((plan) => {
+          const isCurrent = plan.id === currentPlan?.id;
+          const isRequested = plan.id === subscription?.requestedPlanId;
+          return (
+            <div className={`panel billing-plan ${isCurrent ? 'current' : ''}`} key={plan.id}>
+              {isCurrent && <span className="billing-plan-label">Plano atual</span>}
+              <h3>{plan.name}</h3>
+              <p>{plan.description}</p>
+              <strong className="billing-price">{billingPriceLabel(plan)}</strong>
+              <ul>
+                {plan.features.map((feature) => <li key={feature}><Check size={14} />{feature}</li>)}
+              </ul>
+              <button
+                className={isCurrent || isRequested ? 'secondary' : 'primary'}
+                disabled={!canChangePlan || isCurrent || isRequested}
+                onClick={() => onSelectPlan(plan.code)}
+              >
+                {isCurrent ? 'Plano atual' : isRequested ? 'Intenção registrada' : canChangePlan ? 'Selecionar plano' : 'Somente proprietário'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="panel checkout-preparation">
+        <div className="panel-head">
+          <div><h3>Checkout Mercado Pago</h3><p>Preparado, mas ainda desativado neste ambiente.</p></div>
+          <CreditCard size={19} className="team-heading-icon" />
+        </div>
+        <p>Para habilitar cobranças, ainda é necessário configurar as credenciais do Mercado Pago como secrets, criar uma Edge Function que valide a sessão e registrar um webhook que atualize os eventos de pagamento. Por segurança, este botão não abre checkout nem envia dados de pagamento.</p>
+        <button className="primary checkout-button" disabled title="Configure a Edge Function e o webhook antes de habilitar o checkout.">Checkout em preparação</button>
+      </div>
+    </div>
+  );
+}
+
+function Team({ data, currentUserId, saving, onInvite, onRoleChange, onRemove, embedded = false }) {
   const [invite, setInvite] = useState({ email: '', role: 'barber' });
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
@@ -959,7 +1135,7 @@ function Team({ data, currentUserId, saving, onInvite, onRoleChange, onRemove })
   };
 
   return (
-    <section className="content">
+    <section className={embedded ? '' : 'content'}>
       <div className="page-head">
         <div>
           <h2>Equipe</h2>

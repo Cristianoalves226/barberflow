@@ -210,6 +210,97 @@ export async function loadTeamData() {
   };
 }
 
+export const mercadoPagoCheckoutReady = false;
+
+export async function loadBillingData() {
+  const client = requireClient();
+  const membership = await getCurrentMembership();
+  const [plansResult, subscriptionResult] = await Promise.all([
+    client
+      .from('billing_plans')
+      .select(
+        'id, code, name, description, price_cents, currency, billing_interval, trial_days, features, active'
+      )
+      .eq('active', true)
+      .order('price_cents', { ascending: true, nullsFirst: true }),
+    client
+      .from('tenant_subscriptions')
+      .select(
+        'id, plan_id, requested_plan_id, provider, status, current_period_start, current_period_end, trial_ends_at, canceled_at, cancel_at_period_end, plan:billing_plans!tenant_subscriptions_plan_id_fkey(id, code, name, description, price_cents, currency, billing_interval, trial_days, features)'
+      )
+      .eq('tenant_id', membership.tenant_id)
+      .maybeSingle(),
+  ]);
+
+  throwIfError(plansResult.error);
+  throwIfError(subscriptionResult.error);
+
+  return {
+    role: membership.role,
+    plans: (plansResult.data || []).map((plan) => ({
+      id: plan.id,
+      code: plan.code,
+      name: plan.name,
+      description: plan.description,
+      priceCents: plan.price_cents,
+      currency: plan.currency,
+      billingInterval: plan.billing_interval,
+      trialDays: plan.trial_days,
+      features: Array.isArray(plan.features) ? plan.features : [],
+    })),
+    subscription: subscriptionResult.data
+      ? {
+          id: subscriptionResult.data.id,
+          planId: subscriptionResult.data.plan_id,
+          requestedPlanId: subscriptionResult.data.requested_plan_id,
+          provider: subscriptionResult.data.provider,
+          status: subscriptionResult.data.status,
+          currentPeriodStart: subscriptionResult.data.current_period_start,
+          currentPeriodEnd: subscriptionResult.data.current_period_end,
+          trialEndsAt: subscriptionResult.data.trial_ends_at,
+          canceledAt: subscriptionResult.data.canceled_at,
+          cancelAtPeriodEnd: subscriptionResult.data.cancel_at_period_end,
+          plan: subscriptionResult.data.plan
+            ? {
+                id: subscriptionResult.data.plan.id,
+                code: subscriptionResult.data.plan.code,
+                name: subscriptionResult.data.plan.name,
+                description: subscriptionResult.data.plan.description,
+                priceCents: subscriptionResult.data.plan.price_cents,
+                currency: subscriptionResult.data.plan.currency,
+                billingInterval: subscriptionResult.data.plan.billing_interval,
+                trialDays: subscriptionResult.data.plan.trial_days,
+                features: Array.isArray(subscriptionResult.data.plan.features)
+                  ? subscriptionResult.data.plan.features
+                  : [],
+              }
+            : null,
+        }
+      : null,
+    checkoutReady: mercadoPagoCheckoutReady,
+  };
+}
+
+export async function requestSubscriptionPlan(planCode) {
+  if (!planCode?.trim()) {
+    throw new Error('Selecione um plano antes de continuar.');
+  }
+  const { data, error } = await requireClient().rpc('request_subscription_plan', {
+    target_plan_code: planCode.trim(),
+  });
+  throwIfError(error);
+  return data;
+}
+
+export async function requestBillingCheckout() {
+  if (!mercadoPagoCheckoutReady) {
+    throw new Error(
+      'Checkout ainda não disponível: configure uma Edge Function segura e o webhook do Mercado Pago antes de cobrar.'
+    );
+  }
+  throw new Error('O checkout seguro ainda não foi conectado.');
+}
+
 export async function createTeamInvitation({ email, role }) {
   const { data, error } = await requireClient().rpc('create_team_invitation', {
     target_email: email.trim(),
