@@ -51,17 +51,15 @@ Deno.serve(async (request) => {
 
   const baseUrl = Deno.env.get('PUBLIC_APP_URL') || 'https://cristianoalves226.github.io/barberflow/';
   const notificationUrl = `${supabaseUrl}/functions/v1/mercado-pago-webhook`;
-  const testPayerUserId = Deno.env.get('MP_TEST_PAYER_USER_ID');
+  const testPayerEmail = Deno.env.get('MP_TEST_PAYER_EMAIL');
   const period = plan.billing_interval === 'year'
     ? { frequency: 1, frequency_type: 'years' }
     : { frequency: 1, frequency_type: 'months' };
 
   try {
-    const payerEmail = testPayerUserId
-      ? (await mercadoPagoRequest(`/users/${encodeURIComponent(testPayerUserId)}`)).email
-      : userData.user.email;
+    const payerEmail = testPayerEmail || userData.user.email;
     if (!payerEmail) {
-      throw new Error('Não foi possível encontrar o e-mail do comprador de teste.');
+      throw new Error('Configure MP_TEST_PAYER_EMAIL para o ambiente de teste.');
     }
 
     const preapproval = await mercadoPagoRequest('/preapproval', {
