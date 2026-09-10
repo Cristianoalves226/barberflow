@@ -44,6 +44,7 @@ import {
   removeTeamMember,
   loadBillingData,
   requestSubscriptionPlan,
+  requestBillingCheckout,
   subscribeToAuthState,
 } from './lib/supabase';
 
@@ -1017,11 +1018,25 @@ function Configuration({ team, currentUserId, saving, onInvite, onRoleChange, on
 }
 
 function Billing({ data, role, loading, error, onSelectPlan }) {
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState('');
   const canChangePlan = role === 'owner';
   const subscription = data?.subscription;
   const currentPlan = subscription?.plan;
   const requestedPlan = data?.plans?.find((plan) => plan.id === subscription?.requestedPlanId);
   const status = subscription?.status || 'pending';
+
+  const startCheckout = async () => {
+    setCheckoutLoading(true);
+    setCheckoutError('');
+    try {
+      const { initPoint } = await requestBillingCheckout();
+      window.location.assign(initPoint);
+    } catch (checkoutRequestError) {
+      setCheckoutError(checkoutRequestError.message || 'Não foi possível iniciar a assinatura.');
+      setCheckoutLoading(false);
+    }
+  };
 
   if (loading) return <div className="panel billing-loading">Carregando dados da assinatura...</div>;
 
@@ -1030,8 +1045,8 @@ function Billing({ data, role, loading, error, onSelectPlan }) {
       <div className="billing-security-note">
         <ShieldCheck size={19} />
         <div>
-          <strong>Pagamentos protegidos por preparação segura</strong>
-          <p>Nenhuma cobrança é feita pelo navegador. O Mercado Pago só será conectado depois que as credenciais ficarem em uma Edge Function privada.</p>
+        <strong>Pagamentos protegidos por integração segura</strong>
+        <p>O token privado permanece na Edge Function; o navegador recebe apenas a URL segura do Mercado Pago.</p>
         </div>
       </div>
       {error && <div className="team-feedback error" role="alert">{error}</div>}
@@ -1053,7 +1068,7 @@ function Billing({ data, role, loading, error, onSelectPlan }) {
         )}
       </div>
       <div className="billing-heading">
-        <div><h3>Escolha um plano</h3><p>Os preços abaixo são placeholders até a definição comercial.</p></div>
+        <div><h3>Escolha um plano</h3><p>O plano Profissional está disponível por R$ 59,90/mês.</p></div>
         <CreditCard size={19} className="team-heading-icon" />
       </div>
       <div className="billing-plans">
@@ -1082,11 +1097,19 @@ function Billing({ data, role, loading, error, onSelectPlan }) {
       </div>
       <div className="panel checkout-preparation">
         <div className="panel-head">
-          <div><h3>Checkout Mercado Pago</h3><p>Preparado, mas ainda desativado neste ambiente.</p></div>
+          <div><h3>Assinatura Mercado Pago</h3><p>Comece a assinatura recorrente do plano selecionado.</p></div>
           <CreditCard size={19} className="team-heading-icon" />
         </div>
-        <p>Para habilitar cobranças, ainda é necessário configurar as credenciais do Mercado Pago como secrets, criar uma Edge Function que valide a sessão e registrar um webhook que atualize os eventos de pagamento. Por segurança, este botão não abre checkout nem envia dados de pagamento.</p>
-        <button className="primary checkout-button" disabled title="Configure a Edge Function e o webhook antes de habilitar o checkout.">Checkout em preparação</button>
+        <p>A assinatura será criada para o plano solicitado e confirmada pelo webhook do Mercado Pago.</p>
+        {checkoutError && <div className="team-feedback error" role="alert">{checkoutError}</div>}
+        <button
+          className="primary checkout-button"
+          disabled={!canChangePlan || checkoutLoading || !requestedPlan || requestedPlan.priceCents === null}
+          onClick={startCheckout}
+          title={!canChangePlan ? 'Somente o proprietário pode iniciar a assinatura.' : undefined}
+        >
+          {checkoutLoading ? 'Abrindo Mercado Pago...' : 'Assinar plano'}
+        </button>
       </div>
     </div>
   );

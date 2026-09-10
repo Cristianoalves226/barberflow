@@ -210,7 +210,7 @@ export async function loadTeamData() {
   };
 }
 
-export const mercadoPagoCheckoutReady = false;
+export const mercadoPagoCheckoutReady = true;
 
 export async function loadBillingData() {
   const client = requireClient();
@@ -298,7 +298,16 @@ export async function requestBillingCheckout() {
       'Checkout ainda não disponível: configure uma Edge Function segura e o webhook do Mercado Pago antes de cobrar.'
     );
   }
-  throw new Error('O checkout seguro ainda não foi conectado.');
+  const { data, error } = await requireClient().functions.invoke('create-mercado-pago-subscription', {
+    body: {},
+  });
+  throwIfError(error);
+
+  if (!data?.initPoint) {
+    throw new Error('O Mercado Pago não retornou uma URL de assinatura.');
+  }
+
+  return data;
 }
 
 export async function createTeamInvitation({ email, role }) {
