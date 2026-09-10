@@ -301,7 +301,14 @@ export async function requestBillingCheckout() {
   const { data, error } = await requireClient().functions.invoke('create-mercado-pago-subscription', {
     body: {},
   });
-  throwIfError(error);
+  if (error) {
+    let detail = error.message;
+    if (error.context instanceof Response) {
+      const responseBody = await error.context.clone().json().catch(() => null);
+      if (responseBody?.error) detail = responseBody.error;
+    }
+    throw new Error(detail || 'Não foi possível iniciar a assinatura.');
+  }
 
   if (!data?.initPoint) {
     throw new Error('O Mercado Pago não retornou uma URL de assinatura.');
