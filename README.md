@@ -14,10 +14,11 @@ controle financeiro.
 1. Crie um projeto em [supabase.com](https://supabase.com).
 2. No painel do projeto, abra **SQL Editor**, crie uma query e execute, nesta
    ordem, as migrations
-   `supabase/migrations/20260909180000_barberflow_mvp.sql` e
+   `supabase/migrations/20260909180000_barberflow_mvp.sql`,
    `supabase/migrations/20260909200000_barberflow_team_management.sql` e
    `supabase/migrations/20260909220000_barberflow_appointment_safety.sql` e
-   `supabase/migrations/20260909230000_barberflow_client_history.sql`.
+   `supabase/migrations/20260909230000_barberflow_client_history.sql` e
+   `supabase/migrations/20260910100000_barberflow_billing.sql`.
    A primeira cria as tabelas, relacionamentos, índices, triggers de timestamp,
    RLS e o vínculo seguro entre usuários e barbearias. A segunda adiciona
    membros, funções e solicitações de convite. A terceira adiciona o horário de
@@ -25,9 +26,9 @@ controle financeiro.
    sobreposição do mesmo barbeiro dentro da mesma barbearia. A quarta adiciona
    aniversário e preferências opcionais aos clientes e a função segura
    `get_client_history`, usada para exibir o histórico sem atravessar o
-   isolamento por tenant. Se as três primeiras já foram aplicadas, execute
-   somente `20260909230000_barberflow_client_history.sql`; caso contrário,
-   execute as migrations ainda pendentes na ordem acima.
+   isolamento por tenant. Se as quatro primeiras já foram aplicadas, execute
+   somente `20260910100000_barberflow_billing.sql`; caso contrário, execute as
+   migrations ainda pendentes na ordem acima.
 3. Copie `.env.example` para `.env` na raiz do projeto e preencha as variáveis
    com **Project URL** e **Publishable/anon key** (em
    **Project Settings > API**):
@@ -164,6 +165,40 @@ somente `owner`/`manager` conseguem ver solicitações e executar as funções d
 convite, alteração e remoção. Os convites expiram em sete dias e a migration
 impede alterar/remover o proprietário ou promover alguém a proprietário pelo
 cliente.
+
+### Planos, assinatura e preparação do Mercado Pago
+
+A migration `20260910100000_barberflow_billing.sql` cria `billing_plans`,
+`tenant_subscriptions` e `billing_payment_events`, com RLS por tenant. Ela
+semeia os planos Essencial, Profissional e Premium com `price_cents` nulo
+(preço a definir), cria um período de teste inicial e permite que somente o
+proprietário registre a intenção de trocar de plano. Gerentes podem visualizar
+o plano e o status, mas não alterá-los. Eventos de pagamento não podem ser
+lidos nem escritos pelo cliente autenticado: a tabela fica reservada para uma
+integração confiável.
+
+A tela **Configurações > Plano / Assinatura** já exibe estados de teste,
+ativo, pendente e cancelado, mas o botão de checkout permanece desativado.
+Antes de cobrar qualquer valor, siga estes passos:
+
+1. Crie uma aplicação no Mercado Pago e guarde `MP_ACCESS_TOKEN`,
+   `MP_WEBHOOK_SECRET` e demais credenciais somente nos **Secrets** de uma
+   Supabase Edge Function. Nunca coloque essas variáveis em `.env` com prefixo
+   `VITE_`, no navegador ou no GitHub.
+2. Crie uma Edge Function autenticada que valide o JWT, resolva o tenant pela
+   associação em `barber_shop_members`, confira o plano em `billing_plans` e
+   crie a preferência/assinatura usando o token privado. A função deve gravar
+   apenas uma intenção/checkout associado ao tenant, sem aceitar preço,
+   `tenant_id` ou status de pagamento arbitrários do cliente.
+3. Registre um webhook do Mercado Pago apontando para uma Edge Function
+   separada (ou rota dedicada), valide a assinatura do webhook, faça
+   idempotência por `(provider, provider_event_id)` em
+   `billing_payment_events` e atualize `tenant_subscriptions` apenas com o
+   resultado confirmado pela API do Mercado Pago.
+4. Teste aprovações, recusas, estornos, cancelamentos e renovação em sandbox.
+   Só então altere o flag de checkout no frontend e implemente o redirect para
+   a URL retornada pela Edge Function. A migration atual não inicia checkout,
+   não processa cartão e não expõe `service_role`.
 
 ## Funcionalidades conectadas
 
