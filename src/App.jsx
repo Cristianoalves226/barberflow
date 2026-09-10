@@ -21,6 +21,7 @@ import {
   updateAppointmentRecord,
   cancelAppointmentRecord,
   createClientRecord,
+  updateClientRecord,
   createFinanceMovement,
   createServiceRecord,
   getAuthSession,
@@ -31,6 +32,7 @@ import {
   updatePassword,
   isSupabaseConfigured,
   loadBarberFlowData,
+  loadClientHistory,
   loadTeamData,
   createTeamInvitation,
   updateTeamMemberRole,
@@ -261,8 +263,18 @@ function App() {
 
   const derivedData = useMemo(() => {
     const totals = data.appointments.reduce((result, appointment) => {
-      if (appointment.clientId) {
+      if (appointment.clientId && appointment.statusKey === 'completed') {
         result[appointment.clientId] = (result[appointment.clientId] || 0) + appointment.amountCents;
+      }
+      return result;
+    }, {});
+    const lastVisits = data.appointments.reduce((result, appointment) => {
+      if (
+        appointment.clientId &&
+        appointment.statusKey === 'completed' &&
+        (!result[appointment.clientId] || appointment.date > result[appointment.clientId])
+      ) {
+        result[appointment.clientId] = appointment.date;
       }
       return result;
     }, {});
@@ -270,6 +282,10 @@ function App() {
       ...data,
       clients: data.clients.map((client) => ({
         ...client,
+        lastVisitAt: lastVisits[client.id] || client.lastVisitAt,
+        last: lastVisits[client.id]
+          ? formatAgendaDate(lastVisits[client.id], { day: '2-digit', month: '2-digit', year: 'numeric' })
+          : client.last,
         totalCents: client.totalCents || totals[client.id] || 0,
         total: money(client.totalCents || totals[client.id] || 0),
       })),
@@ -284,7 +300,10 @@ function App() {
         if (values.id) await updateAppointmentRecord(values);
         else await createAppointmentRecord(values);
       }
-      if (type === 'client') await createClientRecord(values);
+      if (type === 'client') {
+        if (values.id) await updateClientRecord(values);
+        else await createClientRecord(values);
+      }
       if (type === 'service') await createServiceRecord(values);
       if (type === 'finance') await createFinanceMovement(values);
       await refresh();
@@ -313,6 +332,9 @@ function App() {
   const openNewAppointment = () => setModal({ type: 'appointment', appointment: null });
   const openEditAppointment = (appointment) =>
     setModal({ type: 'appointment', appointment });
+  const openNewClient = () => setModal({ type: 'client', client: null });
+  const openEditClient = (client) => setModal({ type: 'client', client });
+  const openClientDetail = (client) => setModal({ type: 'client-detail', client });
 
   const cancelAppointment = async ({ id: appointmentId, reason = '' }) => {
     if (!window.confirm('Cancelar este agendamento?')) return;
@@ -347,7 +369,16 @@ function App() {
         />
       );
     }
-    if (active === 'Clientes') return <Clients data={derivedData} onNew={() => setModal('client')} />;
+    if (active === 'Clientes') {
+      return (
+        <Clients
+          data={derivedData}
+          onNew={openNewClient}
+          onEdit={openEditClient}
+          onView={openClientDetail}
+        />
+      );
+    }
     if (active === 'Serviços') return <Services data={derivedData} onNew={() => setModal('service')} />;
     if (active === 'Financeiro') return <Finance data={derivedData} onNew={() => setModal('finance')} />;
     if (active === 'Configurações') {
@@ -416,7 +447,21 @@ function App() {
           onSubmit={(values) => save('appointment', values)}
         />
       )}
-      {modal === 'client' && <NewClient saving={saving} onClose={() => setModal(null)} onSubmit={(values) => save('client', values)} />}
+      {modal?.type === 'client' && (
+        <ClientFormModal
+          client={modal.client}
+          saving={saving}
+          onClose={() => setModal(null)}
+          onSubmit={(values) => save('client', values)}
+        />
+      )}
+      {modal?.type === 'client-detail' && (
+        <ClientDetail
+          client={modal.client}
+          onClose={() => setModal(null)}
+          onEdit={() => openEditClient(modal.client)}
+        />
+      )}
       {modal === 'service' && <NewService saving={saving} onClose={() => setModal(null)} onSubmit={(values) => save('service', values)} />}
       {modal === 'finance' && <NewFinance saving={saving} onClose={() => setModal(null)} onSubmit={(values) => save('finance', values)} />}
     </div>
@@ -426,7 +471,23 @@ function App() {
 function addFallbackRecord(current, type, values) {
   const id = `local-${Date.now()}`;
   if (type === 'client') {
-    return { ...current, clients: [...current.clients, { id, name: values.name, phone: values.phone || '—', last: '—', total: money(0), totalCents: 0 }] };
+    return {
+      ...current,
+      clients: [
+        ...current.clients,
+        {
+          id,
+          name: values.name,
+          phone: values.phone || '—',
+          notes: values.notes || '',
+          birthday: values.birthday || '',
+          preferences: values.preferences || '',
+          last: '—',
+          total: money(0),
+          totalCents: 0,
+        },
+      ],
+    };
   }
   if (type === 'service') {
     return {
@@ -681,10 +742,42 @@ function AppointmentRows({ appointments, compact = false, onEdit }) {
   );
 }
 
-function Clients({ data, onNew }) {
+function Clients({ data, onNew, onEdit, onView }) {
   const [query, setQuery] = useState('');
   const visible = data.clients.filter((client) => `${client.name} ${client.phone}`.toLowerCase().includes(query.toLowerCase()));
-  return <section className="content"><div className="page-head"><div><h2>Clientes</h2><p>Gerencie sua base e acompanhe o histórico.</p></div><button className="primary" onClick={onNew}><Plus size={18}/> Novo cliente</button></div><div className="toolbar"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente por nome ou telefone..."/><button className="filter">Todos os clientes ▾</button></div><div className="panel table-wrap"><table><thead><tr><th>Cliente</th><th>Telefone</th><th>Último atendimento</th><th>Total gasto</th><th></th></tr></thead><tbody>{visible.map((client)=><tr key={client.id}><td><div className="table-client"><div className="client-avatar">{initials(client.name)}</div><strong>{client.name}</strong></div></td><td>{client.phone}</td><td>{client.last}</td><td>{money(client.totalCents)}</td><td><button className="more"><MoreHorizontal size={18}/></button></td></tr>)}</tbody></table>{!visible.length && <div className="empty-state">Nenhum cliente encontrado.</div>}</div></section>;
+  return (
+    <section className="content">
+      <div className="page-head">
+        <div><h2>Clientes</h2><p>Gerencie sua base e acompanhe o histórico.</p></div>
+        <button className="primary" onClick={onNew}><Plus size={18}/> Novo cliente</button>
+      </div>
+      <div className="toolbar">
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente por nome ou telefone..." />
+        <button className="filter">Todos os clientes ▾</button>
+      </div>
+      <div className="panel table-wrap">
+        <table>
+          <thead><tr><th>Cliente</th><th>Telefone</th><th>Último atendimento</th><th>Total gasto</th><th /></tr></thead>
+          <tbody>
+            {visible.map((client) => (
+              <tr key={client.id} className="client-row" onClick={() => onView(client)}>
+                <td><div className="table-client"><div className="client-avatar">{initials(client.name)}</div><strong>{client.name}</strong></div></td>
+                <td>{client.phone}</td>
+                <td>{client.last}</td>
+                <td>{money(client.totalCents)}</td>
+                <td>
+                  <button className="more" onClick={(event) => { event.stopPropagation(); onEdit(client); }} aria-label={`Editar ${client.name}`}>
+                    <MoreHorizontal size={18} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!visible.length && <div className="empty-state">Nenhum cliente encontrado.</div>}
+      </div>
+    </section>
+  );
 }
 
 function Services({ data, onNew }) {
@@ -863,8 +956,8 @@ function Team({ data, currentUserId, saving, onInvite, onRoleChange, onRemove })
   );
 }
 
-function Modal({ title, description, onClose, children }) {
-  return <div className="modal-backdrop" onClick={onClose}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>{title}</h2><p>{description}</p></div><button onClick={onClose}>×</button></div>{children}</div></div>;
+function Modal({ title, description, onClose, children, wide = false }) {
+  return <div className="modal-backdrop" onClick={onClose}><div className={`modal ${wide ? 'modal-wide' : ''}`} onClick={(event) => event.stopPropagation()}><div className="modal-head"><div><h2>{title}</h2><p>{description}</p></div><button onClick={onClose}>×</button></div>{children}</div></div>;
 }
 
 function AppointmentModal({ data, barbers = [], appointment, saving, onClose, onCancel, onSubmit }) {
@@ -937,9 +1030,111 @@ function AppointmentModal({ data, barbers = [], appointment, saving, onClose, on
   );
 }
 
-function NewClient({ saving, onClose, onSubmit }) {
-  const [form, setForm] = useState({ name: '', phone: '' });
-  return <Modal title="Novo cliente" description="Adicione um cliente à sua base." onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}><label>Nome<input required autoFocus value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Nome completo" /></label><label>Telefone<input value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} placeholder="(65) 99999-0000" /></label><div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Salvando...' : 'Cadastrar'}</button></div></form></Modal>;
+function ClientFormModal({ client, saving, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    id: client?.id,
+    name: client?.name || '',
+    phone: client?.phone === '—' ? '' : client?.phone || '',
+    birthday: client?.birthday || '',
+    preferences: client?.preferences || '',
+    notes: client?.notes || '',
+  });
+  const update = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }));
+  const editing = Boolean(client);
+
+  return (
+    <Modal
+      title={editing ? 'Editar cliente' : 'Novo cliente'}
+      description={editing ? 'Atualize os dados e preferências do cliente.' : 'Adicione um cliente à sua base.'}
+      onClose={onClose}
+    >
+      <form onSubmit={(event) => { event.preventDefault(); onSubmit(form); }}>
+        <label>Nome<input required autoFocus value={form.name} onChange={update('name')} placeholder="Nome completo" /></label>
+        <div className="form-grid">
+          <label>Telefone<input value={form.phone} onChange={update('phone')} placeholder="(65) 99999-0000" /></label>
+          <label>Aniversário<input type="date" value={form.birthday} onChange={update('birthday')} /></label>
+        </div>
+        <label>Preferências<textarea rows="2" value={form.preferences} onChange={update('preferences')} placeholder="Ex.: prefere máquina 2, água sem gás" /></label>
+        <label>Observações<textarea rows="3" value={form.notes} onChange={update('notes')} placeholder="Anotações importantes sobre o cliente" /></label>
+        <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={saving}>{saving ? 'Salvando...' : editing ? 'Salvar alterações' : 'Cadastrar'}</button></div>
+      </form>
+    </Modal>
+  );
+}
+
+const clientHistoryStatusLabels = {
+  scheduled: 'Agendado',
+  confirmed: 'Confirmado',
+  in_progress: 'Em atendimento',
+  completed: 'Concluído',
+  cancelled: 'Cancelado',
+};
+
+function ClientDetail({ client, onClose, onEdit }) {
+  const [history, setHistory] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [historyError, setHistoryError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+    setLoadingHistory(true);
+    setHistoryError('');
+    loadClientHistory(client.id)
+      .then((records) => {
+        if (mounted) setHistory(records);
+      })
+      .catch((error) => {
+        if (mounted) setHistoryError(error.message || 'Não foi possível carregar o histórico.');
+      })
+      .finally(() => {
+        if (mounted) setLoadingHistory(false);
+      });
+    return () => { mounted = false; };
+  }, [client.id]);
+
+  const completedTotal = history
+    .filter((item) => item.statusKey === 'completed')
+    .reduce((total, item) => total + item.amountCents, 0);
+  const dateLabel = (timestamp) => timestamp
+    ? new Intl.DateTimeFormat('pt-BR').format(new Date(timestamp))
+    : '—';
+
+  return (
+    <Modal title={client.name} description="Dados do cliente e histórico de atendimentos." onClose={onClose} wide>
+      <div className="client-detail-head">
+        <div className="client-detail-avatar client-avatar">{initials(client.name)}</div>
+        <div>
+          <strong>{client.phone}</strong>
+          <small>{client.birthday ? `Aniversário em ${dateLabel(`${client.birthday}T12:00:00`)}` : 'Aniversário não informado'}</small>
+        </div>
+        <button className="secondary" onClick={onEdit}>Editar</button>
+      </div>
+      <div className="client-detail-stats">
+        <div><span>Último atendimento</span><strong>{client.last}</strong></div>
+        <div><span>Total gasto</span><strong>{money(completedTotal)}</strong></div>
+        <div><span>Atendimentos concluídos</span><strong>{history.filter((item) => item.statusKey === 'completed').length}</strong></div>
+      </div>
+      {(client.preferences || client.notes) && (
+        <div className="client-notes-grid">
+          {client.preferences && <div><span>Preferências</span><p>{client.preferences}</p></div>}
+          {client.notes && <div><span>Observações</span><p>{client.notes}</p></div>}
+        </div>
+      )}
+      <div className="client-history">
+        <div className="panel-head"><div><h3>Histórico de atendimentos</h3><p>Valores contabilizados somente quando concluídos.</p></div></div>
+        {loadingHistory && <div className="loading-state client-history-loading">Carregando histórico...</div>}
+        {historyError && <div className="team-feedback error">{historyError}</div>}
+        {!loadingHistory && !historyError && !history.length && <div className="empty-state">Nenhum atendimento registrado.</div>}
+        {!loadingHistory && !historyError && history.map((item) => (
+          <div className="client-history-row" key={item.id}>
+            <div><strong>{dateLabel(item.startsAt)}</strong><small>{item.service} · {item.barber}</small></div>
+            <span className={`status ${item.statusKey}`}>{clientHistoryStatusLabels[item.statusKey] || item.statusKey}</span>
+            <b>{money(item.amountCents)}</b>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
 }
 
 function NewService({ saving, onClose, onSubmit }) {

@@ -248,7 +248,7 @@ export async function loadBarberFlowData() {
         .order('starts_at', { ascending: true }),
       client
         .from('clients')
-        .select('id, name, phone, last_visit_at, created_at')
+        .select('id, name, phone, notes, birthday, preferences, last_visit_at, created_at')
         .eq('tenant_id', tenantId)
         .order('name', { ascending: true }),
       client
@@ -296,6 +296,9 @@ export async function loadBarberFlowData() {
       id: clientRow.id,
       name: clientRow.name,
       phone: clientRow.phone || '—',
+      notes: clientRow.notes || '',
+      birthday: clientRow.birthday || '',
+      preferences: clientRow.preferences || '',
       lastVisitAt: clientRow.last_visit_at,
       last: dateLabel(clientRow.last_visit_at),
       totalCents: 0,
@@ -321,7 +324,27 @@ export async function loadBarberFlowData() {
   };
 }
 
-export async function createClientRecord({ name, phone }) {
+export async function loadClientHistory(clientId) {
+  const { data, error } = await requireClient().rpc('get_client_history', {
+    target_client_id: clientId,
+  });
+  throwIfError(error);
+
+  return (data || []).map((appointment) => ({
+    id: appointment.id,
+    clientId: appointment.client_id,
+    serviceId: appointment.service_id,
+    service: appointment.service_name || 'Serviço removido',
+    barber: appointment.barber_name,
+    startsAt: appointment.starts_at,
+    endsAt: appointment.ends_at,
+    statusKey: appointment.status,
+    notes: appointment.notes || '',
+    amountCents: appointment.amount_cents || 0,
+  }));
+}
+
+export async function createClientRecord({ name, phone, notes, birthday, preferences }) {
   const tenantId = await getCurrentTenantId();
   const { data, error } = await requireClient()
     .from('clients')
@@ -329,7 +352,36 @@ export async function createClientRecord({ name, phone }) {
       tenant_id: tenantId,
       name: name.trim(),
       phone: phone.trim() || null,
+      notes: notes?.trim() || null,
+      birthday: birthday || null,
+      preferences: preferences?.trim() || null,
     })
+    .select('id')
+    .single();
+  throwIfError(error);
+  return data;
+}
+
+export async function updateClientRecord({
+  id,
+  name,
+  phone,
+  notes,
+  birthday,
+  preferences,
+}) {
+  const tenantId = await getCurrentTenantId();
+  const { data, error } = await requireClient()
+    .from('clients')
+    .update({
+      name: name.trim(),
+      phone: phone.trim() || null,
+      notes: notes?.trim() || null,
+      birthday: birthday || null,
+      preferences: preferences?.trim() || null,
+    })
+    .eq('id', id)
+    .eq('tenant_id', tenantId)
     .select('id')
     .single();
   throwIfError(error);
