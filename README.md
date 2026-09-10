@@ -16,14 +16,18 @@ controle financeiro.
    ordem, as migrations
    `supabase/migrations/20260909180000_barberflow_mvp.sql` e
    `supabase/migrations/20260909200000_barberflow_team_management.sql` e
-   `supabase/migrations/20260909220000_barberflow_appointment_safety.sql`.
+   `supabase/migrations/20260909220000_barberflow_appointment_safety.sql` e
+   `supabase/migrations/20260909230000_barberflow_client_history.sql`.
    A primeira cria as tabelas, relacionamentos, índices, triggers de timestamp,
    RLS e o vínculo seguro entre usuários e barbearias. A segunda adiciona
    membros, funções e solicitações de convite. A terceira adiciona o horário de
    término dos atendimentos, cancelamento e a restrição de exclusão que impede
-   sobreposição do mesmo barbeiro dentro da mesma barbearia. Se as migrations
-   anteriores já foram aplicadas, execute somente a terceira; ela foi escrita
-   para ser aplicada com segurança sobre o schema existente.
+   sobreposição do mesmo barbeiro dentro da mesma barbearia. A quarta adiciona
+   aniversário e preferências opcionais aos clientes e a função segura
+   `get_client_history`, usada para exibir o histórico sem atravessar o
+   isolamento por tenant. Se as três primeiras já foram aplicadas, execute
+   somente `20260909230000_barberflow_client_history.sql`; caso contrário,
+   execute as migrations ainda pendentes na ordem acima.
 3. Copie `.env.example` para `.env` na raiz do projeto e preencha as variáveis
    com **Project URL** e **Publishable/anon key** (em
    **Project Settings > API**):
@@ -169,6 +173,9 @@ cliente.
   oferece filtros e navegação por dia, semana e mês; os conflitos de horário
   são rejeitados pelo Supabase e exibidos em português.
 - Criação de clientes, serviços e receitas/despesas.
+- Cadastro e edição de telefone, aniversário, preferências e observações dos
+  clientes. A tela de clientes mostra o último atendimento e o total gasto
+  somente em agendamentos concluídos, além do histórico completo.
 - Métricas do dashboard e financeiro derivadas dos dados carregados.
 - Busca de clientes e índices para as consultas mais frequentes.
 
