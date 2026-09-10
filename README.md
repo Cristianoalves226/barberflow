@@ -192,8 +192,9 @@ supabase functions deploy mercado-pago-webhook
 Configure nos Secrets das Edge Functions `MP_ACCESS_TOKEN` (token de teste),
 `MP_WEBHOOK_SECRET` (em Webhooks no Mercado Pago) e, opcionalmente,
 `PUBLIC_APP_URL`. Para sandbox, configure também
-`MP_TEST_PAYER_USER_ID` com o **User ID** da conta compradora de teste; a
-função consulta o e-mail dessa conta automaticamente pela API. O Supabase fornece `SUPABASE_URL`, `SUPABASE_ANON_KEY` e
+`MP_TEST_PAYER_EMAIL` com o e-mail da conta compradora de teste; ele é
+fornecido quando a conta de teste é criada pela API do Mercado Pago. O
+painel mostra o usuário de login, não o e-mail da conta. O Supabase fornece `SUPABASE_URL`, `SUPABASE_ANON_KEY` e
 `SUPABASE_SERVICE_ROLE_KEY` às funções. Nunca coloque esses valores em `.env`
 com prefixo `VITE_`, no navegador ou no GitHub.
 
