@@ -29,7 +29,17 @@ controle financeiro.
 4. Em **Authentication > Providers**, habilite o provider **Email**. Para
    desenvolvimento, você pode desabilitar a confirmação de e-mail; em
    produção, mantenha-a habilitada e configure o SMTP do projeto.
-5. Instale e execute:
+5. Em **Authentication > URL Configuration**, configure:
+   - **Site URL**: `https://cristianoalves226.github.io/barberflow/`
+   - **Redirect URLs**: `https://cristianoalves226.github.io/barberflow/` e
+     `http://localhost:5173/` (desenvolvimento)
+
+   O fluxo de **Esqueci minha senha** usa automaticamente a origem atual e o
+   caminho base da aplicação como `redirectTo`. Assim, o link de recuperação
+   retorna para o GitHub Pages e abre o formulário para criar uma nova senha.
+   Se o repositório for publicado com outro nome, substitua `/barberflow/` pelo
+   caminho correspondente nas duas configurações acima.
+6. Instale e execute:
 
    ```bash
    npm install
