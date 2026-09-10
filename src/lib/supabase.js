@@ -479,6 +479,23 @@ export async function createFinanceMovement({
   description,
   date,
 }) {
+  if (!['income', 'expense'].includes(type)) {
+    throw new Error('Tipo de movimentação inválido.');
+  }
+  if (!Number.isInteger(amountCents) || amountCents <= 0 || amountCents > 2147483647) {
+    throw new Error('O valor deve ser maior que zero e estar dentro do limite permitido.');
+  }
+  if (!description?.trim()) {
+    throw new Error('Informe uma descrição para a movimentação.');
+  }
+  const parsedDate = new Date(`${date}T12:00:00`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(date || '') ||
+    Number.isNaN(parsedDate.getTime()) ||
+    parsedDate.toISOString().slice(0, 10) !== date
+  ) {
+    throw new Error('Informe uma data válida para a movimentação.');
+  }
   const tenantId = await getCurrentTenantId();
   const { data, error } = await requireClient()
     .from('finance_movements')
