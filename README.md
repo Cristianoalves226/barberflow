@@ -15,12 +15,15 @@ controle financeiro.
 2. No painel do projeto, abra **SQL Editor**, crie uma query e execute, nesta
    ordem, as migrations
    `supabase/migrations/20260909180000_barberflow_mvp.sql` e
-   `supabase/migrations/20260909200000_barberflow_team_management.sql`.
+   `supabase/migrations/20260909200000_barberflow_team_management.sql` e
+   `supabase/migrations/20260909220000_barberflow_appointment_safety.sql`.
    A primeira cria as tabelas, relacionamentos, índices, triggers de timestamp,
    RLS e o vínculo seguro entre usuários e barbearias. A segunda adiciona
-   membros, funções e solicitações de convite. Se a primeira já foi aplicada,
-   execute somente a segunda; ela foi escrita para ser aplicada com segurança
-   sobre o schema existente.
+   membros, funções e solicitações de convite. A terceira adiciona o horário de
+   término dos atendimentos, cancelamento e a restrição de exclusão que impede
+   sobreposição do mesmo barbeiro dentro da mesma barbearia. Se as migrations
+   anteriores já foram aplicadas, execute somente a terceira; ela foi escrita
+   para ser aplicada com segurança sobre o schema existente.
 3. Copie `.env.example` para `.env` na raiz do projeto e preencha as variáveis
    com **Project URL** e **Publishable/anon key** (em
    **Project Settings > API**):
@@ -162,9 +165,28 @@ cliente.
 
 - Carregamento de appointments, clientes, serviços e movimentações financeiras
   da barbearia vinculada ao usuário autenticado.
-- Criação de agendamentos, clientes, serviços e receitas/despesas.
+- Criação, edição, cancelamento e mudança de status de agendamentos. A agenda
+  oferece filtros e navegação por dia, semana e mês; os conflitos de horário
+  são rejeitados pelo Supabase e exibidos em português.
+- Criação de clientes, serviços e receitas/despesas.
 - Métricas do dashboard e financeiro derivadas dos dados carregados.
 - Busca de clientes e índices para as consultas mais frequentes.
+
+### Segurança da agenda
+
+A migration `20260909220000_barberflow_appointment_safety.sql` deve ser
+executada **depois** das duas migrations anteriores. Ela preenche `ends_at`
+dos agendamentos existentes a partir da duração do serviço e cria a constraint
+`appointments_active_barber_no_overlap`, usando uma faixa `[starts_at, ends_at)`
+por `tenant_id` e barbeiro. Agendamentos `cancelled` e `completed` não ocupam
+horário; os demais não podem se sobrepor. O trigger também recalcula o fim
+quando o serviço ou horário muda e registra `cancelled_at`.
+
+Se o banco já tiver agendamentos ativos conflitantes, resolva-os (alterando o
+horário ou cancelando um deles) antes de executar essa migration; a criação da
+constraint deve ser atômica e não deve ser ignorada. O RLS continua permitindo
+que barbeiros operem somente os agendamentos do próprio tenant, sem conceder
+permissões de gerenciamento da equipe.
 
 ## Publicação no GitHub Pages
 
