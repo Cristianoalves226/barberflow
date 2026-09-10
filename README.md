@@ -166,7 +166,7 @@ convite, alteração e remoção. Os convites expiram em sete dias e a migration
 impede alterar/remover o proprietário ou promover alguém a proprietário pelo
 cliente.
 
-### Planos, assinatura e preparação do Mercado Pago
+### Planos, assinatura e Mercado Pago
 
 A migration `20260910100000_barberflow_billing.sql` cria `billing_plans`,
 `tenant_subscriptions` e `billing_payment_events`, com RLS por tenant. Ela
@@ -177,28 +177,31 @@ o plano e o status, mas não alterá-los. Eventos de pagamento não podem ser
 lidos nem escritos pelo cliente autenticado: a tabela fica reservada para uma
 integração confiável.
 
-A tela **Configurações > Plano / Assinatura** já exibe estados de teste,
-ativo, pendente e cancelado, mas o botão de checkout permanece desativado.
-Antes de cobrar qualquer valor, siga estes passos:
+O plano Profissional está configurado localmente por R$ 59,90/mês, conforme o
+plano criado no Mercado Pago. Execute também as migrations
+`20260910120000_barberflow_professional_price.sql` e
+`20260910121000_barberflow_billing_event_subscription_id.sql`.
 
-1. Crie uma aplicação no Mercado Pago e guarde `MP_ACCESS_TOKEN`,
-   `MP_WEBHOOK_SECRET` e demais credenciais somente nos **Secrets** de uma
-   Supabase Edge Function. Nunca coloque essas variáveis em `.env` com prefixo
-   `VITE_`, no navegador ou no GitHub.
-2. Crie uma Edge Function autenticada que valide o JWT, resolva o tenant pela
-   associação em `barber_shop_members`, confira o plano em `billing_plans` e
-   crie a preferência/assinatura usando o token privado. A função deve gravar
-   apenas uma intenção/checkout associado ao tenant, sem aceitar preço,
-   `tenant_id` ou status de pagamento arbitrários do cliente.
-3. Registre um webhook do Mercado Pago apontando para uma Edge Function
-   separada (ou rota dedicada), valide a assinatura do webhook, faça
-   idempotência por `(provider, provider_event_id)` em
-   `billing_payment_events` e atualize `tenant_subscriptions` apenas com o
-   resultado confirmado pela API do Mercado Pago.
-4. Teste aprovações, recusas, estornos, cancelamentos e renovação em sandbox.
-   Só então altere o flag de checkout no frontend e implemente o redirect para
-   a URL retornada pela Edge Function. A migration atual não inicia checkout,
-   não processa cartão e não expõe `service_role`.
+Publique as funções:
+
+```text
+supabase functions deploy create-mercado-pago-subscription
+supabase functions deploy mercado-pago-webhook
+```
+
+Configure nos Secrets das Edge Functions `MP_ACCESS_TOKEN` (token de teste),
+`MP_WEBHOOK_SECRET` (em Webhooks no Mercado Pago) e, opcionalmente,
+`PUBLIC_APP_URL`. O Supabase fornece `SUPABASE_URL`, `SUPABASE_ANON_KEY` e
+`SUPABASE_SERVICE_ROLE_KEY` às funções. Nunca coloque esses valores em `.env`
+com prefixo `VITE_`, no navegador ou no GitHub.
+
+No Mercado Pago, registre o webhook em
+`https://<PROJECT_REF>.supabase.co/functions/v1/mercado-pago-webhook` e
+selecione eventos de assinaturas/preapproval. No app, o proprietário seleciona
+o plano Profissional e clica em **Assinar plano**. A função valida a sessão,
+resolve o tenant, consulta o preço no banco e cria a assinatura; o webhook
+confirma o status. Teste aprovações, recusas, cancelamentos e renovação em
+sandbox antes de trocar para credenciais de produção.
 
 ## Funcionalidades conectadas
 
