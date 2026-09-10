@@ -150,6 +150,64 @@ async function getCurrentTenantId() {
   return (await getCurrentMembership()).tenant_id;
 }
 
+export async function loadTeamData() {
+  const client = requireClient();
+  const membership = await getCurrentMembership();
+  const [membersResult, invitationsResult] = await Promise.all([
+    client.rpc('get_team_members'),
+    client
+      .from('team_invitations')
+      .select('id, email, role, status, expires_at, created_at')
+      .eq('tenant_id', membership.tenant_id)
+      .order('created_at', { ascending: false }),
+  ]);
+
+  throwIfError(membersResult.error);
+  throwIfError(invitationsResult.error);
+
+  return {
+    role: membership.role,
+    members: (membersResult.data || []).map((member) => ({
+      id: member.user_id,
+      email: member.email || 'E-mail não disponível',
+      role: member.role,
+      createdAt: member.created_at,
+    })),
+    invitations: (invitationsResult.data || []).map((invitation) => ({
+      id: invitation.id,
+      email: invitation.email,
+      role: invitation.role,
+      status: invitation.status,
+      expiresAt: invitation.expires_at,
+      createdAt: invitation.created_at,
+    })),
+  };
+}
+
+export async function createTeamInvitation({ email, role }) {
+  const { data, error } = await requireClient().rpc('create_team_invitation', {
+    target_email: email.trim(),
+    target_role: role,
+  });
+  throwIfError(error);
+  return data;
+}
+
+export async function updateTeamMemberRole({ userId, role }) {
+  const { error } = await requireClient().rpc('update_team_member_role', {
+    target_user_id: userId,
+    target_role: role,
+  });
+  throwIfError(error);
+}
+
+export async function removeTeamMember(userId) {
+  const { error } = await requireClient().rpc('remove_team_member', {
+    target_user_id: userId,
+  });
+  throwIfError(error);
+}
+
 export async function loadBarberFlowData() {
   const client = requireClient();
   const tenantId = await getCurrentTenantId();

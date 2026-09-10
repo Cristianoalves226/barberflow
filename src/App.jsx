@@ -13,6 +13,8 @@ import {
   TrendingUp,
   MessageCircle,
   MoreHorizontal,
+  UserPlus,
+  Trash2,
 } from 'lucide-react';
 import {
   createAppointmentRecord,
@@ -27,6 +29,10 @@ import {
   updatePassword,
   isSupabaseConfigured,
   loadBarberFlowData,
+  loadTeamData,
+  createTeamInvitation,
+  updateTeamMemberRole,
+  removeTeamMember,
   subscribeToAuthState,
 } from './lib/supabase';
 
@@ -36,6 +42,12 @@ const EMPTY_DATA = {
   clients: [],
   services: [],
   finance: [],
+};
+
+const EMPTY_TEAM = {
+  role: 'barber',
+  members: [],
+  invitations: [],
 };
 
 const FALLBACK_DATA = {
@@ -161,6 +173,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState(EMPTY_DATA);
+  const [team, setTeam] = useState(EMPTY_TEAM);
 
   useEffect(() => {
     if (!isSupabaseConfigured) {
@@ -207,7 +220,12 @@ function App() {
     setLoading(true);
     try {
       setError('');
-      setData(await loadBarberFlowData());
+      const [nextData, nextTeam] = await Promise.all([
+        loadBarberFlowData(),
+        loadTeamData(),
+      ]);
+      setData(nextData);
+      setTeam(nextTeam);
     } catch (loadError) {
       setError(loadError.message || 'Não foi possível carregar os dados do Supabase.');
     } finally {
@@ -253,6 +271,20 @@ function App() {
     }
   };
 
+  const manageTeam = async (action) => {
+    setSaving(true);
+    setError('');
+    try {
+      await action();
+      await refresh();
+    } catch (teamError) {
+      setError(teamError.message || 'Não foi possível atualizar a equipe.');
+      throw teamError;
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const openNewAppointment = () => setModal('appointment');
   const nav = [
     ['Dashboard', LayoutDashboard],
@@ -268,6 +300,18 @@ function App() {
     if (active === 'Clientes') return <Clients data={derivedData} onNew={() => setModal('client')} />;
     if (active === 'Serviços') return <Services data={derivedData} onNew={() => setModal('service')} />;
     if (active === 'Financeiro') return <Finance data={derivedData} onNew={() => setModal('finance')} />;
+    if (active === 'Configurações') {
+      return (
+        <Team
+          data={team}
+          currentUserId={session.user.id}
+          saving={saving}
+          onInvite={(values) => manageTeam(() => createTeamInvitation(values))}
+          onRoleChange={(values) => manageTeam(() => updateTeamMemberRole(values))}
+          onRemove={(userId) => manageTeam(() => removeTeamMember(userId))}
+        />
+      );
+    }
     return <Dashboard data={derivedData} onNew={openNewAppointment} />;
   };
 
@@ -533,6 +577,171 @@ function Finance({ data, onNew }) {
   const revenue = monthFinance.filter((item) => item.type === 'income').reduce((sum, item) => sum + item.amountCents, 0);
   const expenses = monthFinance.filter((item) => item.type === 'expense').reduce((sum, item) => sum + item.amountCents, 0);
   return <section className="content"><div className="page-head"><div><h2>Financeiro</h2><p>Acompanhe receitas e resultados da sua barbearia.</p></div><button className="primary" onClick={onNew}><Plus size={18}/> Lançar movimentação</button></div><div className="stats"><Stat icon={TrendingUp} label="Receita no mês" value={money(revenue)} detail="Entradas do mês" positive/><Stat icon={WalletCards} label="Despesas" value={money(expenses)} detail={`${monthFinance.filter((item) => item.type === 'expense').length} lançamentos`}/><Stat icon={WalletCards} label="Resultado" value={money(revenue - expenses)} detail="Receitas menos despesas" positive/></div><div className="panel"><div className="panel-head"><div><h3>Movimentações recentes</h3><p>Setembro de 2026</p></div></div>{data.finance.map((movement) => <div className="finance-row" key={movement.id}><span>{movement.dateLabel} · {movement.description}</span><b className={movement.type === 'expense' ? 'expense' : ''}>{movement.type === 'expense' ? '- ' : '+ '}{money(movement.amountCents)}</b></div>)}{!data.finance.length && <div className="empty-state">Nenhuma movimentação cadastrada.</div>}</div></section>;
+}
+
+const roleLabels = {
+  owner: 'Proprietário',
+  manager: 'Gerente',
+  barber: 'Barbeiro',
+};
+
+function Team({ data, currentUserId, saving, onInvite, onRoleChange, onRemove }) {
+  const [invite, setInvite] = useState({ email: '', role: 'barber' });
+  const [message, setMessage] = useState('');
+  const [formError, setFormError] = useState('');
+  const canManage = data.role === 'owner' || data.role === 'manager';
+
+  const submitInvite = async (event) => {
+    event.preventDefault();
+    setMessage('');
+    setFormError('');
+    try {
+      await onInvite(invite);
+      setInvite({ email: '', role: 'barber' });
+      setMessage('Solicitação criada. O convite ficará pendente até a conclusão pelo administrador do Supabase.');
+    } catch (inviteError) {
+      setFormError(inviteError.message || 'Não foi possível criar o convite.');
+    }
+  };
+
+  const changeRole = async (member, role) => {
+    setMessage('');
+    setFormError('');
+    try {
+      await onRoleChange({ userId: member.id, role });
+      setMessage('Função atualizada.');
+    } catch (roleError) {
+      setFormError(roleError.message || 'Não foi possível alterar a função.');
+    }
+  };
+
+  const remove = async (member) => {
+    if (!window.confirm(`Remover ${member.email} da equipe?`)) return;
+    setMessage('');
+    setFormError('');
+    try {
+      await onRemove(member.id);
+      setMessage('Membro removido da equipe.');
+    } catch (removeError) {
+      setFormError(removeError.message || 'Não foi possível remover o membro.');
+    }
+  };
+
+  return (
+    <section className="content">
+      <div className="page-head">
+        <div>
+          <h2>Equipe</h2>
+          <p>Controle quem pode acessar e operar sua barbearia.</p>
+        </div>
+        <span className="role-badge">{roleLabels[data.role] || data.role}</span>
+      </div>
+      {(message || formError) && (
+        <div className={formError ? 'team-feedback error' : 'team-feedback'} role={formError ? 'alert' : 'status'}>
+          {formError || message}
+        </div>
+      )}
+
+      <div className="panel team-panel">
+        <div className="panel-head">
+          <div>
+            <h3>Membros da equipe</h3>
+            <p>Barbeiros podem consultar a equipe, mas não podem gerenciá-la.</p>
+          </div>
+          <span className="badge">{data.members.length}</span>
+        </div>
+        <div className="team-list">
+          {data.members.map((member) => {
+            const isCurrentUser = member.id === currentUserId;
+            const isOwner = member.role === 'owner';
+            return (
+              <div className="team-row" key={member.id}>
+                <div className="client-avatar">{initials(member.email)}</div>
+                <div className="team-member-info">
+                  <strong>{member.email}</strong>
+                  <small>{isCurrentUser ? 'Você · ' : ''}{roleLabels[member.role] || member.role}</small>
+                </div>
+                {canManage && !isOwner ? (
+                  <select
+                    className="team-role-select"
+                    value={member.role}
+                    disabled={saving || isCurrentUser}
+                    onChange={(event) => changeRole(member, event.target.value)}
+                    aria-label={`Função de ${member.email}`}
+                  >
+                    <option value="barber">Barbeiro</option>
+                    <option value="manager">Gerente</option>
+                  </select>
+                ) : (
+                  <span className="team-role">{roleLabels[member.role] || member.role}</span>
+                )}
+                {canManage && !isOwner && !isCurrentUser && (
+                  <button className="team-remove" disabled={saving} onClick={() => remove(member)} aria-label={`Remover ${member.email}`}>
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {!data.members.length && <div className="empty-state">Nenhum membro encontrado.</div>}
+        </div>
+      </div>
+
+      {canManage && (
+        <div className="panel team-panel">
+          <div className="panel-head">
+            <div>
+              <h3>Convidar membro</h3>
+              <p>Crie uma solicitação segura para um novo acesso.</p>
+            </div>
+            <UserPlus size={19} className="team-heading-icon" />
+          </div>
+          <form className="team-invite-form" onSubmit={submitInvite}>
+            <label>E-mail
+              <input
+                required
+                type="email"
+                value={invite.email}
+                onChange={(event) => setInvite({ ...invite, email: event.target.value })}
+                placeholder="barbeiro@exemplo.com"
+              />
+            </label>
+            <label>Função
+              <select value={invite.role} onChange={(event) => setInvite({ ...invite, role: event.target.value })}>
+                <option value="barber">Barbeiro</option>
+                <option value="manager">Gerente</option>
+              </select>
+            </label>
+            <button className="primary" disabled={saving}><UserPlus size={16} />{saving ? 'Salvando...' : 'Criar convite'}</button>
+          </form>
+          <p className="team-hint">O pedido não envia e-mail pelo navegador nem expõe a service_role. Novas contas com este e-mail entram automaticamente; contas existentes seguem o procedimento administrativo do README.</p>
+        </div>
+      )}
+
+      <div className="panel team-panel">
+        <div className="panel-head">
+          <div>
+            <h3>Convites pendentes</h3>
+            <p>Acompanhe solicitações ainda não concluídas.</p>
+          </div>
+          <span className="badge">{data.invitations.filter((item) => item.status === 'pending').length}</span>
+        </div>
+        <div className="team-list">
+          {data.invitations.map((invitation) => (
+            <div className="team-row invitation-row" key={invitation.id}>
+              <div className="client-avatar">{initials(invitation.email)}</div>
+              <div className="team-member-info">
+                <strong>{invitation.email}</strong>
+                <small>{roleLabels[invitation.role] || invitation.role}</small>
+              </div>
+              <span className={`invite-status ${invitation.status}`}>{invitation.status === 'pending' ? 'Pendente' : invitation.status === 'accepted' ? 'Concluído' : 'Revogado'}</span>
+            </div>
+          ))}
+          {!data.invitations.length && <div className="empty-state">Nenhum convite registrado.</div>}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function Modal({ title, description, onClose, children }) {
