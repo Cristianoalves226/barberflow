@@ -35,10 +35,6 @@ Deno.serve(async (request) => {
   if (subscriptionError || !subscription?.requested_plan_id) {
     return errorResponse('Selecione um plano antes de iniciar a assinatura.');
   }
-  if (subscription.provider_subscription_id) {
-    return errorResponse('Esta barbearia já possui uma assinatura Mercado Pago.', 409);
-  }
-
   const { data: plan, error: planError } = await admin
     .from('billing_plans')
     .select('id, name, price_cents, billing_interval, active')
@@ -57,6 +53,24 @@ Deno.serve(async (request) => {
     : { frequency: 1, frequency_type: 'months' };
 
   try {
+    if (subscription.provider_subscription_id) {
+      const existing = await mercadoPagoRequest(
+        `/preapproval/${encodeURIComponent(subscription.provider_subscription_id)}`,
+      );
+      if (existing.status === 'authorized') {
+        return errorResponse('Esta barbearia já possui uma assinatura ativa.', 409);
+      }
+      const existingInitPoint = existing.init_point || existing.sandbox_init_point;
+      if (existingInitPoint) {
+        return jsonResponse({
+          id: existing.id,
+          initPoint: existingInitPoint,
+          reused: true,
+        });
+      }
+      return errorResponse('A assinatura pendente não possui uma URL de checkout válida.', 502);
+    }
+
     const payerEmail = testPayerEmail || userData.user.email;
     if (!payerEmail) {
       throw new Error('Configure MP_TEST_PAYER_EMAIL para o ambiente de teste.');
