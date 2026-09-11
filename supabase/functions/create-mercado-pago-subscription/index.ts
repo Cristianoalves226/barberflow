@@ -61,21 +61,33 @@ Deno.serve(async (request) => {
 
   try {
     if (subscription.provider_subscription_id) {
-      const existing = await mercadoPagoRequest(
-        `/preapproval/${encodeURIComponent(subscription.provider_subscription_id)}`,
-      );
-      if (existing.status === 'authorized') {
-        return errorResponse('Esta barbearia já possui uma assinatura ativa.', 409);
+      try {
+        const existing = await mercadoPagoRequest(
+          `/preapproval/${encodeURIComponent(subscription.provider_subscription_id)}`,
+        );
+        if (existing.status === 'authorized') {
+          return errorResponse('Esta barbearia já possui uma assinatura ativa.', 409);
+        }
+        const existingInitPoint = checkoutUrl(existing);
+        if (existingInitPoint) {
+          return jsonResponse({
+            id: existing.id,
+            initPoint: existingInitPoint,
+            reused: true,
+          });
+        }
+        return errorResponse('A assinatura pendente não possui uma URL de checkout válida.', 502);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '';
+        if (!message.includes('HTTP 404')) throw error;
+
+        const { error: clearError } = await admin
+          .from('tenant_subscriptions')
+          .update({ provider_subscription_id: null, status: 'incomplete' })
+          .eq('id', subscription.id)
+          .eq('tenant_id', membership.tenant_id);
+        if (clearError) throw new Error('Não foi possível liberar a assinatura inválida.');
       }
-      const existingInitPoint = checkoutUrl(existing);
-      if (existingInitPoint) {
-        return jsonResponse({
-          id: existing.id,
-          initPoint: existingInitPoint,
-          reused: true,
-        });
-      }
-      return errorResponse('A assinatura pendente não possui uma URL de checkout válida.', 502);
     }
 
     const payerEmail = testPayerEmail || userData.user.email;
