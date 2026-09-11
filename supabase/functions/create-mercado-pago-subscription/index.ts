@@ -6,6 +6,13 @@ const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
 const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const admin = createClient(supabaseUrl, serviceRoleKey);
 
+function checkoutUrl(preapproval: Record<string, unknown>) {
+  const isTest = Deno.env.get('MP_ENVIRONMENT') !== 'production';
+  return isTest
+    ? (preapproval.sandbox_init_point || preapproval.init_point)
+    : (preapproval.init_point || preapproval.sandbox_init_point);
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return errorResponse('Método não permitido.', 405);
@@ -60,7 +67,7 @@ Deno.serve(async (request) => {
       if (existing.status === 'authorized') {
         return errorResponse('Esta barbearia já possui uma assinatura ativa.', 409);
       }
-      const existingInitPoint = existing.init_point || existing.sandbox_init_point;
+      const existingInitPoint = checkoutUrl(existing);
       if (existingInitPoint) {
         return jsonResponse({
           id: existing.id,
@@ -105,7 +112,7 @@ Deno.serve(async (request) => {
 
     return jsonResponse({
       id: preapproval.id,
-      initPoint: preapproval.init_point || preapproval.sandbox_init_point,
+      initPoint: checkoutUrl(preapproval),
     });
   } catch (error) {
     return errorResponse(error instanceof Error ? error.message : 'Falha ao criar assinatura.', 502);
