@@ -1,5 +1,2 @@
 [functions.mercado-pago-webhook]
 verify_jwt = false
-
-[functions.create-mercado-pago-test-buyer]
-verify_jwt = false
