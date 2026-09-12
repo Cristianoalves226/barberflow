@@ -69,20 +69,25 @@ Deno.serve(async (request) => {
     const status = statusMap[preapproval.status] || 'incomplete';
     const { data: subscription } = await admin
       .from('tenant_subscriptions')
-      .select('id')
+      .select('id, requested_plan_id')
       .eq('tenant_id', tenantId)
       .maybeSingle();
     if (!subscription) return jsonResponse({ received: true });
 
+    const subscriptionUpdate: Record<string, unknown> = {
+      provider_subscription_id: dataId,
+      status,
+      current_period_start: preapproval.date_created || null,
+      current_period_end: preapproval.next_payment_date || null,
+      canceled_at: status === 'canceled' ? new Date().toISOString() : null,
+    };
+    if (status === 'active' && subscription.requested_plan_id) {
+      subscriptionUpdate.plan_id = subscription.requested_plan_id;
+    }
+
     const { error: updateError } = await admin
       .from('tenant_subscriptions')
-      .update({
-        provider_subscription_id: dataId,
-        status,
-        current_period_start: preapproval.date_created || null,
-        current_period_end: preapproval.next_payment_date || null,
-        canceled_at: status === 'canceled' ? new Date().toISOString() : null,
-      })
+      .update(subscriptionUpdate)
       .eq('id', subscription.id);
     if (updateError) throw updateError;
 
