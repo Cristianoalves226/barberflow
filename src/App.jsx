@@ -439,7 +439,7 @@ function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-bottom"><div className="plan">Plano <strong>Profissional</strong><small>23 dias restantes</small></div></div>
+        <div className="sidebar-bottom"><SidebarPlan /></div>
       </aside>
 
       <main className="main">
@@ -931,6 +931,68 @@ const billingStatusLabels = {
   pending: 'Aguardando checkout',
 };
 
+function SidebarPlan() {
+  const [billing, setBilling] = useState(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setBilling(await loadBillingData());
+    } catch {
+      // O conteúdo principal de cobrança continua responsável por exibir erros.
+    }
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const next = await loadBillingData();
+        if (mounted) setBilling(next);
+      } catch {
+        if (mounted) setBilling(null);
+      }
+    };
+    load();
+
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    const intervalId = window.setInterval(refreshIfVisible, 15000);
+    document.addEventListener('visibilitychange', refreshIfVisible);
+    return () => {
+      mounted = false;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', refreshIfVisible);
+    };
+  }, [refresh]);
+
+  const subscription = billing?.subscription;
+  const planName = subscription?.plan?.name || 'Sem plano';
+  const status = subscription?.status || 'pending';
+  const statusLabel = billingStatusLabels[status] || status;
+  const endDate = subscription?.currentPeriodEnd || subscription?.trialEndsAt;
+  const cancelScheduled = Boolean(subscription?.cancelAtPeriodEnd);
+  const endLabel = billingDateLabel(endDate);
+
+  return (
+    <div className="plan" title={cancelScheduled ? `Cancelamento programado até ${endLabel}` : statusLabel}>
+      <span>Plano</span>
+      <strong>{planName}</strong>
+      <small>
+        {cancelScheduled
+          ? `Cancelamento programado até ${endLabel}`
+          : status === 'canceled'
+            ? 'Assinatura cancelada'
+            : status === 'trialing'
+              ? `Teste até ${endLabel}`
+              : endDate
+                ? `Ativo até ${endLabel}`
+                : statusLabel}
+      </small>
+    </div>
+  );
+}
+
 function billingDateLabel(value) {
   return value
     ? new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(value))
@@ -948,30 +1010,53 @@ function Configuration({ team, currentUserId, saving, onInvite, onRoleChange, on
   const [billingLoading, setBillingLoading] = useState(false);
   const [billingError, setBillingError] = useState('');
 
+  const refreshBilling = useCallback(async (showLoading = false) => {
+    if (showLoading) setBillingLoading(true);
+    setBillingError('');
+    try {
+      const nextBilling = await loadBillingData();
+      setBilling(nextBilling);
+      return nextBilling;
+    } catch (loadError) {
+      setBillingError(loadError.message || 'Não foi possível carregar os dados da assinatura.');
+      return null;
+    } finally {
+      if (showLoading) setBillingLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let mounted = true;
-    setBillingLoading(true);
-    setBillingError('');
-    loadBillingData()
-      .then((nextBilling) => {
-        if (mounted) setBilling(nextBilling);
-      })
-      .catch((loadError) => {
+    const load = async () => {
+      const nextBilling = await loadBillingData().catch((loadError) => {
         if (mounted) setBillingError(loadError.message || 'Não foi possível carregar os planos.');
-      })
-      .finally(() => {
-        if (mounted) setBillingLoading(false);
+        return null;
       });
+      if (mounted && nextBilling) setBilling(nextBilling);
+      if (mounted) setBillingLoading(false);
+    };
+
+    setBillingLoading(true);
+    load();
+
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') refreshBilling(false);
+    };
+    const intervalId = window.setInterval(refreshIfVisible, 10000);
+    document.addEventListener('visibilitychange', refreshIfVisible);
+
     return () => {
       mounted = false;
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', refreshIfVisible);
     };
-  }, []);
+  }, [refreshBilling]);
 
   const selectPlan = async (planCode) => {
     setBillingError('');
     try {
       await requestSubscriptionPlan(planCode);
-      setBilling(await loadBillingData());
+      await refreshBilling(false);
     } catch (selectionError) {
       setBillingError(selectionError.message || 'Não foi possível registrar a intenção do plano.');
     }
