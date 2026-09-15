@@ -7,7 +7,20 @@ const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const admin = createClient(supabaseUrl, serviceRoleKey);
 
 function checkoutUrl(preapproval: Record<string, unknown>) {
-  return preapproval.init_point || preapproval.sandbox_init_point;
+  const rawUrl = preapproval.init_point || preapproval.sandbox_init_point;
+  if (typeof rawUrl !== 'string' || !rawUrl) return rawUrl;
+
+  // O init_point retornado pelo Mercado Pago para preapproval pode conter
+  // `activation=true`. No checkout de teste, esse parâmetro leva para
+  // "Página inexistente". Removemos somente esse parâmetro e preservamos
+  // todos os demais dados do checkout.
+  try {
+    const url = new URL(rawUrl);
+    url.searchParams.delete('activation');
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
 }
 
 function checkoutDiagnostics(preapproval: Record<string, unknown>) {
@@ -327,6 +340,9 @@ Deno.serve(async (request) => {
         : preapproval?.sandbox_init_point
           ? 'sandbox_init_point'
           : 'none',
+      activationRemoved: typeof preapproval?.init_point === 'string'
+        ? preapproval.init_point.includes('activation=') && typeof initPoint === 'string' && !initPoint.includes('activation=')
+        : false,
     });
 
     if (!initPoint) {
