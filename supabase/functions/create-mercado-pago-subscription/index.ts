@@ -183,7 +183,12 @@ Deno.serve(async (request) => {
               : 'none',
         });
 
-        if (existing.status === 'pending' && existingInitPoint && !payerMismatch) {
+        // No ambiente de teste, não reutilizamos um checkout pending anterior.
+        // O Mercado Pago pode manter um init_point antigo/inutilizável; nesse caso,
+        // precisamos criar uma nova preapproval para obter um novo checkout.
+        const shouldReusePendingCheckout = mpEnvironment !== 'test';
+
+        if (existing.status === 'pending' && existingInitPoint && !payerMismatch && shouldReusePendingCheckout) {
           console.log('STEP_4C_RETURNING_EXISTING_CHECKOUT', {
             subscriptionId: existing.id,
             source: existing?.init_point ? 'init_point' : 'sandbox_init_point',
@@ -197,6 +202,9 @@ Deno.serve(async (request) => {
           mercadoPagoStatus: existing?.status ?? null,
           hasCheckoutUrl: !!existingInitPoint,
           payerMismatch,
+          reason: mpEnvironment === 'test' && existing.status === 'pending'
+            ? 'test_environment_pending_checkout_not_reused'
+            : 'stale_or_invalid_subscription',
         });
 
         const { error: clearError } = await admin
