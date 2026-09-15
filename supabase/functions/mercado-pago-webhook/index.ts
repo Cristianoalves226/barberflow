@@ -23,6 +23,7 @@ async function validSignature(request: Request, dataId: string) {
     hasRequestId: Boolean(requestId),
     requestIdLength: requestId?.length ?? 0,
     dataId,
+    signatureDataId: dataId.toLowerCase(),
   });
 
   if (!secret || !signature || !requestId) return false;
@@ -33,7 +34,11 @@ async function validSignature(request: Request, dataId: string) {
   }));
   if (!values.ts || !values.v1) return false;
 
-  const manifest = `id:${dataId};request-id:${requestId};ts:${values.ts};`;
+  // O Mercado Pago exige data.id em minúsculas no manifest da assinatura,
+  // mesmo quando o data.id recebido na URL possui letras maiúsculas.
+  const normalizedDataId = dataId.toLowerCase();
+  const manifest = `id:${normalizedDataId};request-id:${requestId};ts:${values.ts};`;
+
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
@@ -126,8 +131,7 @@ Deno.serve(async (request) => {
   const payload = await request.json().catch(() => null);
 
   // O Mercado Pago envia data.id tanto na query string quanto no corpo.
-  // Para validação da assinatura, priorizamos o valor da query string,
-  // conforme o formato documentado para Webhooks.
+  // Para validação da assinatura, usamos o valor da query string conforme a documentação.
   const dataId = String(url.searchParams.get('data.id') || payload?.data?.id || '');
   const eventType = String(url.searchParams.get('type') || payload?.type || url.searchParams.get('topic') || '');
 
