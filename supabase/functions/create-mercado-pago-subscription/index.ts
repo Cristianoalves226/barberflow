@@ -14,6 +14,12 @@ function checkoutUrl(preapproval: Record<string, unknown>) {
 }
 
 Deno.serve(async (request) => {
+  
+  console.log('CREATE_SUBSCRIPTION_INICIO', {
+  method: request.method,
+  timestamp: new Date().toISOString(),
+  });
+  
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return errorResponse('Método não permitido.', 405);
 
