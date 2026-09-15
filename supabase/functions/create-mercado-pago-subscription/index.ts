@@ -111,7 +111,15 @@ Deno.serve(async (request) => {
         status: 'pending',
       }),
     });
-
+    console.log(
+  'MERCADO_PAGO_CHECKOUT_DEBUG:',
+  JSON.stringify({
+    id: preapproval.id,
+    status: preapproval.status,
+    init_point: preapproval.init_point ?? null,
+    sandbox_init_point: preapproval.sandbox_init_point ?? null,
+  })
+);
     const { error: updateError } = await admin
       .from('tenant_subscriptions')
       .update({
