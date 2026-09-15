@@ -121,10 +121,18 @@ Deno.serve(async (request) => {
 
   const baseUrl = Deno.env.get('PUBLIC_APP_URL') || 'https://cristianoalves226.github.io/barberflow/';
   const notificationUrl = `${supabaseUrl}/functions/v1/mercado-pago-webhook`;
-  const testPayerEmail = Deno.env.get('MP_TEST_PAYER_EMAIL');
+  const mpEnvironment = Deno.env.get('MP_ENVIRONMENT') ?? 'not_configured';
+  const testPayerEmail = Deno.env.get('MP_TEST_PAYER_EMAIL')?.trim();
+  const testPayerId = Deno.env.get('MP_TEST_PAYER_ID')?.trim();
   const period = plan.billing_interval === 'year'
     ? { frequency: 1, frequency_type: 'years' }
     : { frequency: 1, frequency_type: 'months' };
+
+  // Em ambiente de teste, nunca usamos o e-mail do usuário autenticado como pagador.
+  // Isso evita criar a assinatura com a conta Seller em vez do Test Buyer.
+  if (mpEnvironment === 'test' && (!testPayerEmail || !testPayerId)) {
+    return errorResponse('Configure MP_TEST_PAYER_EMAIL e MP_TEST_PAYER_ID para o ambiente de teste.');
+  }
 
   try {
     if (subscription.provider_subscription_id) {
@@ -151,6 +159,21 @@ Deno.serve(async (request) => {
           return errorResponse('Esta barbearia já possui uma assinatura ativa.', 409);
         }
 
+        // Em teste, só reutilizamos uma assinatura se o payer_id for o Test Buyer configurado.
+        // Isso impede que uma assinatura antiga criada com um Seller seja reaproveitada.
+        const existingPayerId = existing?.payer_id != null ? String(existing.payer_id) : '';
+        const expectedTestPayerId = testPayerId ?? '';
+        const payerMismatch = mpEnvironment === 'test'
+          && !!expectedTestPayerId
+          && existingPayerId !== expectedTestPayerId;
+
+        console.log('STEP_4C_PAYER_VALIDATION', {
+          environment: mpEnvironment,
+          existingPayerId: existingPayerId || null,
+          expectedTestPayerId: expectedTestPayerId || null,
+          payerMatches: !payerMismatch,
+        });
+
         const existingInitPoint = checkoutUrl(existing);
         console.log('STEP_4C_CHECKOUT_URL', {
           hasInitPoint: !!existingInitPoint,
@@ -162,10 +185,11 @@ Deno.serve(async (request) => {
               : 'none',
         });
 
-        if (existing.status === 'pending' && existingInitPoint) {
+        if (existing.status === 'pending' && existingInitPoint && !payerMismatch) {
           console.log('STEP_4C_RETURNING_EXISTING_CHECKOUT', {
             subscriptionId: existing.id,
             source: existing?.init_point ? 'init_point' : 'sandbox_init_point',
+            payerId: existingPayerId || null,
           });
           return jsonResponse({ id: existing.id, initPoint: existingInitPoint, reused: true });
         }
@@ -174,6 +198,7 @@ Deno.serve(async (request) => {
           provider_subscription_id: subscription.provider_subscription_id,
           mercadoPagoStatus: existing?.status ?? null,
           hasCheckoutUrl: !!existingInitPoint,
+          payerMismatch,
         });
 
         const { error: clearError } = await admin
@@ -211,14 +236,18 @@ Deno.serve(async (request) => {
       }
     }
 
-    const payerEmail = testPayerEmail || userData.user.email;
+    const payerEmail = mpEnvironment === 'test'
+      ? testPayerEmail
+      : testPayerEmail || userData.user.email;
+
     if (!payerEmail) {
       throw new Error('Configure MP_TEST_PAYER_EMAIL para o ambiente de teste.');
     }
 
     console.log('STEP_5_BEFORE_MERCADO_PAGO', {
       payerEmailConfigured: !!payerEmail,
-      environment: Deno.env.get('MP_ENVIRONMENT') ?? 'not_configured',
+      payerIdConfigured: !!testPayerId,
+      environment: mpEnvironment,
       billingInterval: plan.billing_interval,
       amount: plan.price_cents / 100,
     });
