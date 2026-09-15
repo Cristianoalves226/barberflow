@@ -10,6 +10,45 @@ function checkoutUrl(preapproval: Record<string, unknown>) {
   return preapproval.init_point || preapproval.sandbox_init_point;
 }
 
+function checkoutDiagnostics(preapproval: Record<string, unknown>) {
+  const initPoint = typeof preapproval.init_point === 'string' ? preapproval.init_point : '';
+  const sandboxInitPoint = typeof preapproval.sandbox_init_point === 'string'
+    ? preapproval.sandbox_init_point
+    : '';
+
+  const parseUrl = (value: string) => {
+    if (!value) return null;
+    try {
+      const url = new URL(value);
+      return {
+        origin: url.origin,
+        pathname: url.pathname,
+        hasPreapprovalId: url.searchParams.has('preapproval_id'),
+        hasActivation: url.searchParams.has('activation'),
+      };
+    } catch {
+      return { invalidUrl: true };
+    }
+  };
+
+  return {
+    id: preapproval.id ?? null,
+    status: preapproval.status ?? null,
+    application_id: preapproval.application_id ?? null,
+    collector_id: preapproval.collector_id ?? null,
+    payer_id: preapproval.payer_id ?? null,
+    date_created: preapproval.date_created ?? null,
+    last_modified: preapproval.last_modified ?? null,
+    reason: preapproval.reason ?? null,
+    external_reference: preapproval.external_reference ?? null,
+    auto_recurring: preapproval.auto_recurring ?? null,
+    hasInitPoint: !!initPoint,
+    hasSandboxInitPoint: !!sandboxInitPoint,
+    initPoint: parseUrl(initPoint),
+    sandboxInitPoint: parseUrl(sandboxInitPoint),
+  };
+}
+
 Deno.serve(async (request) => {
   console.log('CREATE_SUBSCRIPTION_INICIO', { method: request.method, timestamp: new Date().toISOString() });
 
@@ -88,13 +127,6 @@ Deno.serve(async (request) => {
     : { frequency: 1, frequency_type: 'months' };
 
   try {
-    /*
-     * Existing subscription rules:
-     * authorized -> block duplicate subscription.
-     * pending + valid checkout -> reuse checkout.
-     * pending without checkout -> clear stale reference and create a new one.
-     * 404 / non-active state -> clear stale reference and create a new one.
-     */
     if (subscription.provider_subscription_id) {
       console.log('STEP_4A_EXISTING_SUBSCRIPTION', {
         provider_subscription_id: subscription.provider_subscription_id,
@@ -112,6 +144,8 @@ Deno.serve(async (request) => {
           hasInitPoint: !!existing?.init_point,
           hasSandboxInitPoint: !!existing?.sandbox_init_point,
         });
+
+        console.log('STEP_4C_EXISTING_PREAPPROVAL_DIAGNOSTICS', checkoutDiagnostics(existing));
 
         if (existing.status === 'authorized') {
           return errorResponse('Esta barbearia já possui uma assinatura ativa.', 409);
@@ -212,6 +246,8 @@ Deno.serve(async (request) => {
       init_point: preapproval.init_point ?? null,
       sandbox_init_point: preapproval.sandbox_init_point ?? null,
     }));
+
+    console.log('MERCADO_PAGO_NEW_PREAPPROVAL_DIAGNOSTICS', checkoutDiagnostics(preapproval));
 
     const { error: updateError } = await admin
       .from('tenant_subscriptions')
