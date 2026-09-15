@@ -123,15 +123,15 @@ Deno.serve(async (request) => {
   const notificationUrl = `${supabaseUrl}/functions/v1/mercado-pago-webhook`;
   const mpEnvironment = Deno.env.get('MP_ENVIRONMENT') ?? 'not_configured';
   const testPayerEmail = Deno.env.get('MP_TEST_PAYER_EMAIL')?.trim();
-  const testPayerId = Deno.env.get('MP_TEST_PAYER_ID')?.trim();
+  const testPayerUserId = Deno.env.get('MP_TEST_PAYER_USER_ID')?.trim();
   const period = plan.billing_interval === 'year'
     ? { frequency: 1, frequency_type: 'years' }
     : { frequency: 1, frequency_type: 'months' };
 
-  // Em ambiente de teste, nunca usamos o e-mail do usuário autenticado como pagador.
-  // Isso evita criar a assinatura com a conta Seller em vez do Test Buyer.
-  if (mpEnvironment === 'test' && (!testPayerEmail || !testPayerId)) {
-    return errorResponse('Configure MP_TEST_PAYER_EMAIL e MP_TEST_PAYER_ID para o ambiente de teste.');
+  // Em ambiente de teste, usamos exclusivamente a conta Test Buyer configurada.
+  // Nunca usamos o e-mail do usuário autenticado como pagador de teste.
+  if (mpEnvironment === 'test' && (!testPayerEmail || !testPayerUserId)) {
+    return errorResponse('Configure MP_TEST_PAYER_EMAIL e MP_TEST_PAYER_USER_ID para o ambiente de teste.');
   }
 
   try {
@@ -159,10 +159,8 @@ Deno.serve(async (request) => {
           return errorResponse('Esta barbearia já possui uma assinatura ativa.', 409);
         }
 
-        // Em teste, só reutilizamos uma assinatura se o payer_id for o Test Buyer configurado.
-        // Isso impede que uma assinatura antiga criada com um Seller seja reaproveitada.
         const existingPayerId = existing?.payer_id != null ? String(existing.payer_id) : '';
-        const expectedTestPayerId = testPayerId ?? '';
+        const expectedTestPayerId = testPayerUserId ?? '';
         const payerMismatch = mpEnvironment === 'test'
           && !!expectedTestPayerId
           && existingPayerId !== expectedTestPayerId;
@@ -246,7 +244,7 @@ Deno.serve(async (request) => {
 
     console.log('STEP_5_BEFORE_MERCADO_PAGO', {
       payerEmailConfigured: !!payerEmail,
-      payerIdConfigured: !!testPayerId,
+      payerUserIdConfigured: !!testPayerUserId,
       environment: mpEnvironment,
       billingInterval: plan.billing_interval,
       amount: plan.price_cents / 100,
@@ -277,6 +275,29 @@ Deno.serve(async (request) => {
     }));
 
     console.log('MERCADO_PAGO_NEW_PREAPPROVAL_DIAGNOSTICS', checkoutDiagnostics(preapproval));
+
+    const createdPayerId = preapproval?.payer_id != null ? String(preapproval.payer_id) : '';
+    const expectedPayerId = mpEnvironment === 'test' ? (testPayerUserId ?? '') : '';
+    const createdPayerMismatch = mpEnvironment === 'test'
+      && !!expectedPayerId
+      && createdPayerId !== expectedPayerId;
+
+    console.log('STEP_5A_CREATED_PAYER_VALIDATION', {
+      environment: mpEnvironment,
+      createdPayerId: createdPayerId || null,
+      expectedTestPayerId: expectedPayerId || null,
+      payerMatches: !createdPayerMismatch,
+    });
+
+    if (createdPayerMismatch) {
+      // Não associamos uma assinatura criada com o pagador errado ao tenant.
+      // A assinatura no Mercado Pago continua existindo para investigação manual.
+      throw new Error(
+        `O Mercado Pago vinculou a assinatura ao payer_id ${createdPayerId || 'ausente'}, `
+        + `mas o Test Buyer configurado é ${expectedPayerId}. `
+        + 'Verifique MP_TEST_PAYER_EMAIL antes de tentar novamente.',
+      );
+    }
 
     const { error: updateError } = await admin
       .from('tenant_subscriptions')
