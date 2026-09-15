@@ -12,12 +12,19 @@ const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 const admin = createClient(supabaseUrl, serviceRoleKey);
 
-function checkoutUrl(preapproval: Record<string, unknown>) {
-  const isTest = Deno.env.get('MP_ENVIRONMENT') !== 'production';
-
-  return isTest
-    ? (preapproval.sandbox_init_point || preapproval.init_point)
-    : (preapproval.init_point || preapproval.sandbox_init_point);
+/**
+ * Obtém a URL oficial de checkout retornada pelo Mercado Pago.
+ *
+ * O Mercado Pago está retornando init_point na assinatura atual.
+ * sandbox_init_point fica apenas como fallback.
+ */
+function checkoutUrl(
+  preapproval: Record<string, unknown>,
+) {
+  return (
+    preapproval.init_point ||
+    preapproval.sandbox_init_point
+  );
 }
 
 Deno.serve(async (request) => {
@@ -27,26 +34,39 @@ Deno.serve(async (request) => {
   });
 
   if (request.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+    return new Response('ok', {
+      headers: corsHeaders,
+    });
   }
 
   if (request.method !== 'POST') {
-    return errorResponse('Método não permitido.', 405);
+    return errorResponse(
+      'Método não permitido.',
+      405,
+    );
   }
 
-  const authorization = request.headers.get('Authorization');
+  const authorization =
+    request.headers.get('Authorization');
 
   if (!authorization?.startsWith('Bearer ')) {
-    return errorResponse('Autenticação obrigatória.', 401);
+    return errorResponse(
+      'Autenticação obrigatória.',
+      401,
+    );
   }
 
-  const userClient = createClient(supabaseUrl, anonKey, {
-    global: {
-      headers: {
-        Authorization: authorization,
+  const userClient = createClient(
+    supabaseUrl,
+    anonKey,
+    {
+      global: {
+        headers: {
+          Authorization: authorization,
+        },
       },
     },
-  });
+  );
 
   const { data: userData, error: userError } =
     await userClient.auth.getUser();
@@ -57,15 +77,20 @@ Deno.serve(async (request) => {
   });
 
   if (userError || !userData.user) {
-    return errorResponse('Sessão inválida ou expirada.', 401);
+    return errorResponse(
+      'Sessão inválida ou expirada.',
+      401,
+    );
   }
 
-  const { data: membership, error: membershipError } =
-    await admin
-      .from('barber_shop_members')
-      .select('tenant_id, role')
-      .eq('user_id', userData.user.id)
-      .maybeSingle();
+  const {
+    data: membership,
+    error: membershipError,
+  } = await admin
+    .from('barber_shop_members')
+    .select('tenant_id, role')
+    .eq('user_id', userData.user.id)
+    .maybeSingle();
 
   console.log('STEP_2_MEMBERSHIP', {
     found: !!membership,
@@ -80,21 +105,26 @@ Deno.serve(async (request) => {
     );
   }
 
-  if (!membership || membership.role !== 'owner') {
+  if (
+    !membership ||
+    membership.role !== 'owner'
+  ) {
     return errorResponse(
       'Apenas o proprietário pode iniciar a assinatura.',
       403,
     );
   }
 
-  const { data: subscription, error: subscriptionError } =
-    await admin
-      .from('tenant_subscriptions')
-      .select(
-        'id, requested_plan_id, provider_subscription_id',
-      )
-      .eq('tenant_id', membership.tenant_id)
-      .maybeSingle();
+  const {
+    data: subscription,
+    error: subscriptionError,
+  } = await admin
+    .from('tenant_subscriptions')
+    .select(
+      'id, requested_plan_id, provider_subscription_id',
+    )
+    .eq('tenant_id', membership.tenant_id)
+    .maybeSingle();
 
   console.log('STEP_3_SUBSCRIPTION', {
     found: !!subscription,
@@ -102,7 +132,8 @@ Deno.serve(async (request) => {
       subscription?.requested_plan_id ?? null,
     provider_subscription_id:
       !!subscription?.provider_subscription_id,
-    error: subscriptionError?.message ?? null,
+    error:
+      subscriptionError?.message ?? null,
   });
 
   if (
@@ -114,15 +145,17 @@ Deno.serve(async (request) => {
     );
   }
 
-  const { data: plan, error: planError } =
-    await admin
-      .from('billing_plans')
-      .select(
-        'id, name, price_cents, billing_interval, active',
-      )
-      .eq('id', subscription.requested_plan_id)
-      .eq('active', true)
-      .maybeSingle();
+  const {
+    data: plan,
+    error: planError,
+  } = await admin
+    .from('billing_plans')
+    .select(
+      'id, name, price_cents, billing_interval, active',
+    )
+    .eq('id', subscription.requested_plan_id)
+    .eq('active', true)
+    .maybeSingle();
 
   console.log('STEP_4_PLAN', {
     found: !!plan,
@@ -168,15 +201,18 @@ Deno.serve(async (request) => {
   try {
     /*
      * =========================================================
-     * VERIFICAÇÃO DE ASSINATURA EXISTENTE
+     * VERIFICAR ASSINATURA EXISTENTE
      * =========================================================
      */
 
     if (subscription.provider_subscription_id) {
-      console.log('STEP_4A_EXISTING_SUBSCRIPTION', {
-        provider_subscription_id:
-          subscription.provider_subscription_id,
-      });
+      console.log(
+        'STEP_4A_EXISTING_SUBSCRIPTION',
+        {
+          provider_subscription_id:
+            subscription.provider_subscription_id,
+        },
+      );
 
       try {
         console.log(
@@ -219,10 +255,28 @@ Deno.serve(async (request) => {
               !!existingInitPoint,
             initPointType:
               typeof existingInitPoint,
+            source:
+              existing?.init_point
+                ? 'init_point'
+                : existing?.sandbox_init_point
+                  ? 'sandbox_init_point'
+                  : 'none',
           },
         );
 
         if (existingInitPoint) {
+          console.log(
+            'STEP_4C_RETURNING_EXISTING_CHECKOUT',
+            {
+              subscriptionId:
+                existing.id,
+              source:
+                existing?.init_point
+                  ? 'init_point'
+                  : 'sandbox_init_point',
+            },
+          );
+
           return jsonResponse({
             id: existing.id,
             initPoint: existingInitPoint,
@@ -260,18 +314,22 @@ Deno.serve(async (request) => {
           'STEP_4E_CLEARING_INVALID_SUBSCRIPTION',
         );
 
-        const { error: clearError } =
-          await admin
-            .from('tenant_subscriptions')
-            .update({
-              provider_subscription_id: null,
-              status: 'incomplete',
-            })
-            .eq('id', subscription.id)
-            .eq(
-              'tenant_id',
-              membership.tenant_id,
-            );
+        const {
+          error: clearError,
+        } = await admin
+          .from('tenant_subscriptions')
+          .update({
+            provider_subscription_id: null,
+            status: 'incomplete',
+          })
+          .eq(
+            'id',
+            subscription.id,
+          )
+          .eq(
+            'tenant_id',
+            membership.tenant_id,
+          );
 
         if (clearError) {
           console.error(
@@ -292,12 +350,13 @@ Deno.serve(async (request) => {
 
     /*
      * =========================================================
-     * CRIAÇÃO DE NOVA ASSINATURA
+     * CRIAR NOVA ASSINATURA
      * =========================================================
      */
 
     const payerEmail =
-      testPayerEmail || userData.user.email;
+      testPayerEmail ||
+      userData.user.email;
 
     if (!payerEmail) {
       throw new Error(
@@ -311,8 +370,9 @@ Deno.serve(async (request) => {
         payerEmailConfigured:
           !!payerEmail,
         environment:
-          Deno.env.get('MP_ENVIRONMENT') ??
-          'not_configured',
+          Deno.env.get(
+            'MP_ENVIRONMENT',
+          ) ?? 'not_configured',
         billingInterval:
           plan.billing_interval,
         amount:
@@ -328,20 +388,28 @@ Deno.serve(async (request) => {
           body: JSON.stringify({
             reason:
               `BarberFlow - ${plan.name}`,
+
             external_reference:
               membership.tenant_id,
+
             payer_email:
               payerEmail,
+
             back_url:
               baseUrl,
+
             notification_url:
               notificationUrl,
+
             auto_recurring: {
               ...period,
+
               transaction_amount:
                 plan.price_cents / 100,
+
               currency_id: 'BRL',
             },
+
             status: 'pending',
           }),
         },
@@ -352,27 +420,35 @@ Deno.serve(async (request) => {
       JSON.stringify({
         id: preapproval.id,
         status: preapproval.status,
+
         init_point:
-          preapproval.init_point ?? null,
+          preapproval.init_point ??
+          null,
+
         sandbox_init_point:
           preapproval.sandbox_init_point ??
           null,
       }),
     );
 
-    const { error: updateError } =
-      await admin
-        .from('tenant_subscriptions')
-        .update({
-          provider_subscription_id:
-            String(preapproval.id),
-          status: 'pending',
-        })
-        .eq('id', subscription.id)
-        .eq(
-          'tenant_id',
-          membership.tenant_id,
-        );
+    const {
+      error: updateError,
+    } = await admin
+      .from('tenant_subscriptions')
+      .update({
+        provider_subscription_id:
+          String(preapproval.id),
+
+        status: 'pending',
+      })
+      .eq(
+        'id',
+        subscription.id,
+      )
+      .eq(
+        'tenant_id',
+        membership.tenant_id,
+      );
 
     if (updateError) {
       throw new Error(
@@ -388,8 +464,16 @@ Deno.serve(async (request) => {
       {
         hasInitPoint:
           !!initPoint,
+
         initPointType:
           typeof initPoint,
+
+        source:
+          preapproval?.init_point
+            ? 'init_point'
+            : preapproval?.sandbox_init_point
+              ? 'sandbox_init_point'
+              : 'none',
       },
     );
 
@@ -401,9 +485,13 @@ Deno.serve(async (request) => {
 
     return jsonResponse({
       id: preapproval.id,
+
       initPoint,
+
       status:
-        preapproval.status ?? 'pending',
+        preapproval.status ??
+        'pending',
+
       reused: false,
     });
   } catch (error) {
