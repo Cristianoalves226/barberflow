@@ -60,11 +60,12 @@ Deno.serve(async (request) => {
     return errorResponse('Sessão inválida ou expirada.', 401);
   }
 
-  const { data: membership, error: membershipError } = await admin
-    .from('barber_shop_members')
-    .select('tenant_id, role')
-    .eq('user_id', userData.user.id)
-    .maybeSingle();
+  const { data: membership, error: membershipError } =
+    await admin
+      .from('barber_shop_members')
+      .select('tenant_id, role')
+      .eq('user_id', userData.user.id)
+      .maybeSingle();
 
   console.log('STEP_2_MEMBERSHIP', {
     found: !!membership,
@@ -86,13 +87,14 @@ Deno.serve(async (request) => {
     );
   }
 
-  const { data: subscription, error: subscriptionError } = await admin
-    .from('tenant_subscriptions')
-    .select(
-      'id, requested_plan_id, provider_subscription_id',
-    )
-    .eq('tenant_id', membership.tenant_id)
-    .maybeSingle();
+  const { data: subscription, error: subscriptionError } =
+    await admin
+      .from('tenant_subscriptions')
+      .select(
+        'id, requested_plan_id, provider_subscription_id',
+      )
+      .eq('tenant_id', membership.tenant_id)
+      .maybeSingle();
 
   console.log('STEP_3_SUBSCRIPTION', {
     found: !!subscription,
@@ -112,14 +114,15 @@ Deno.serve(async (request) => {
     );
   }
 
-  const { data: plan, error: planError } = await admin
-    .from('billing_plans')
-    .select(
-      'id, name, price_cents, billing_interval, active',
-    )
-    .eq('id', subscription.requested_plan_id)
-    .eq('active', true)
-    .maybeSingle();
+  const { data: plan, error: planError } =
+    await admin
+      .from('billing_plans')
+      .select(
+        'id, name, price_cents, billing_interval, active',
+      )
+      .eq('id', subscription.requested_plan_id)
+      .eq('active', true)
+      .maybeSingle();
 
   console.log('STEP_4_PLAN', {
     found: !!plan,
@@ -163,14 +166,41 @@ Deno.serve(async (request) => {
         };
 
   try {
+    /*
+     * =========================================================
+     * VERIFICAÇÃO DE ASSINATURA EXISTENTE
+     * =========================================================
+     */
+
     if (subscription.provider_subscription_id) {
+      console.log('STEP_4A_EXISTING_SUBSCRIPTION', {
+        provider_subscription_id:
+          subscription.provider_subscription_id,
+      });
+
       try {
+        console.log(
+          'STEP_4B_BEFORE_GET_PREAPPROVAL',
+        );
+
         const existing =
           await mercadoPagoRequest(
             `/preapproval/${encodeURIComponent(
               subscription.provider_subscription_id,
             )}`,
           );
+
+        console.log(
+          'STEP_4C_AFTER_GET_PREAPPROVAL',
+          {
+            id: existing?.id ?? null,
+            status: existing?.status ?? null,
+            hasInitPoint:
+              !!existing?.init_point,
+            hasSandboxInitPoint:
+              !!existing?.sandbox_init_point,
+          },
+        );
 
         if (existing.status === 'authorized') {
           return errorResponse(
@@ -181,6 +211,16 @@ Deno.serve(async (request) => {
 
         const existingInitPoint =
           checkoutUrl(existing);
+
+        console.log(
+          'STEP_4C_CHECKOUT_URL',
+          {
+            hasInitPoint:
+              !!existingInitPoint,
+            initPointType:
+              typeof existingInitPoint,
+          },
+        );
 
         if (existingInitPoint) {
           return jsonResponse({
@@ -195,31 +235,66 @@ Deno.serve(async (request) => {
           502,
         );
       } catch (error) {
+        console.error(
+          'STEP_4D_EXISTING_SUBSCRIPTION_ERROR',
+          error,
+        );
+
         const message =
           error instanceof Error
             ? error.message
             : '';
 
+        console.log(
+          'STEP_4D_EXISTING_SUBSCRIPTION_ERROR_MESSAGE',
+          {
+            message,
+          },
+        );
+
         if (!message.includes('HTTP 404')) {
           throw error;
         }
 
-        const { error: clearError } = await admin
-          .from('tenant_subscriptions')
-          .update({
-            provider_subscription_id: null,
-            status: 'incomplete',
-          })
-          .eq('id', subscription.id)
-          .eq('tenant_id', membership.tenant_id);
+        console.log(
+          'STEP_4E_CLEARING_INVALID_SUBSCRIPTION',
+        );
+
+        const { error: clearError } =
+          await admin
+            .from('tenant_subscriptions')
+            .update({
+              provider_subscription_id: null,
+              status: 'incomplete',
+            })
+            .eq('id', subscription.id)
+            .eq(
+              'tenant_id',
+              membership.tenant_id,
+            );
 
         if (clearError) {
+          console.error(
+            'STEP_4F_CLEAR_INVALID_SUBSCRIPTION_ERROR',
+            clearError,
+          );
+
           throw new Error(
             'Não foi possível liberar a assinatura inválida.',
           );
         }
+
+        console.log(
+          'STEP_4G_INVALID_SUBSCRIPTION_CLEARED',
+        );
       }
     }
+
+    /*
+     * =========================================================
+     * CRIAÇÃO DE NOVA ASSINATURA
+     * =========================================================
+     */
 
     const payerEmail =
       testPayerEmail || userData.user.email;
@@ -230,33 +305,47 @@ Deno.serve(async (request) => {
       );
     }
 
-    console.log('STEP_5_BEFORE_MERCADO_PAGO', {
-      payerEmailConfigured: !!payerEmail,
-      environment:
-        Deno.env.get('MP_ENVIRONMENT') ?? 'not_configured',
-      billingInterval: plan.billing_interval,
-      amount: plan.price_cents / 100,
-    });
+    console.log(
+      'STEP_5_BEFORE_MERCADO_PAGO',
+      {
+        payerEmailConfigured:
+          !!payerEmail,
+        environment:
+          Deno.env.get('MP_ENVIRONMENT') ??
+          'not_configured',
+        billingInterval:
+          plan.billing_interval,
+        amount:
+          plan.price_cents / 100,
+      },
+    );
 
     const preapproval =
-      await mercadoPagoRequest('/preapproval', {
-        method: 'POST',
-        body: JSON.stringify({
-          reason: `BarberFlow - ${plan.name}`,
-          external_reference:
-            membership.tenant_id,
-          payer_email: payerEmail,
-          back_url: baseUrl,
-          notification_url: notificationUrl,
-          auto_recurring: {
-            ...period,
-            transaction_amount:
-              plan.price_cents / 100,
-            currency_id: 'BRL',
-          },
-          status: 'pending',
-        }),
-      });
+      await mercadoPagoRequest(
+        '/preapproval',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            reason:
+              `BarberFlow - ${plan.name}`,
+            external_reference:
+              membership.tenant_id,
+            payer_email:
+              payerEmail,
+            back_url:
+              baseUrl,
+            notification_url:
+              notificationUrl,
+            auto_recurring: {
+              ...period,
+              transaction_amount:
+                plan.price_cents / 100,
+              currency_id: 'BRL',
+            },
+            status: 'pending',
+          }),
+        },
+      );
 
     console.log(
       'MERCADO_PAGO_CHECKOUT_DEBUG:',
@@ -266,19 +355,24 @@ Deno.serve(async (request) => {
         init_point:
           preapproval.init_point ?? null,
         sandbox_init_point:
-          preapproval.sandbox_init_point ?? null,
+          preapproval.sandbox_init_point ??
+          null,
       }),
     );
 
-    const { error: updateError } = await admin
-      .from('tenant_subscriptions')
-      .update({
-        provider_subscription_id:
-          String(preapproval.id),
-        status: 'pending',
-      })
-      .eq('id', subscription.id)
-      .eq('tenant_id', membership.tenant_id);
+    const { error: updateError } =
+      await admin
+        .from('tenant_subscriptions')
+        .update({
+          provider_subscription_id:
+            String(preapproval.id),
+          status: 'pending',
+        })
+        .eq('id', subscription.id)
+        .eq(
+          'tenant_id',
+          membership.tenant_id,
+        );
 
     if (updateError) {
       throw new Error(
@@ -289,10 +383,15 @@ Deno.serve(async (request) => {
     const initPoint =
       checkoutUrl(preapproval);
 
-    console.log('STEP_6_CHECKOUT_URL', {
-      hasInitPoint: !!initPoint,
-      initPointType: typeof initPoint,
-    });
+    console.log(
+      'STEP_6_CHECKOUT_URL',
+      {
+        hasInitPoint:
+          !!initPoint,
+        initPointType:
+          typeof initPoint,
+      },
+    );
 
     if (!initPoint) {
       throw new Error(
@@ -303,7 +402,8 @@ Deno.serve(async (request) => {
     return jsonResponse({
       id: preapproval.id,
       initPoint,
-      status: preapproval.status ?? 'pending',
+      status:
+        preapproval.status ?? 'pending',
       reused: false,
     });
   } catch (error) {
