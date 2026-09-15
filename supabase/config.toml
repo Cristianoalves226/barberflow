@@ -3,3 +3,6 @@ verify_jwt = false
 
 [functions.create-mercado-pago-test-buyer]
 verify_jwt = false
+
+[functions.create-mercado-pago-subscription]
+verify_jwt = false
