@@ -56,6 +56,62 @@ async function validSignature(request: Request, dataId: string) {
   return valid;
 }
 
+async function updateTenantSubscription(tenantId: string, dataId: string, status: string, preapproval: Record<string, unknown>) {
+  const { data: subscription, error: subscriptionError } = await admin
+    .from('tenant_subscriptions')
+    .select('id, requested_plan_id')
+    .eq('tenant_id', tenantId)
+    .maybeSingle();
+
+  if (subscriptionError) throw subscriptionError;
+
+  if (!subscription) {
+    console.error('WEBHOOK_SUBSCRIPTION_NOT_FOUND', { tenantId, dataId });
+    return false;
+  }
+
+  const subscriptionUpdate: Record<string, unknown> = {
+    provider_subscription_id: String(preapproval.id ?? dataId),
+    status,
+    current_period_start: preapproval.date_created || null,
+    current_period_end: preapproval.next_payment_date || null,
+    canceled_at: status === 'canceled' ? new Date().toISOString() : null,
+  };
+
+  if (status === 'active' && subscription.requested_plan_id) {
+    subscriptionUpdate.plan_id = subscription.requested_plan_id;
+  }
+
+  console.log('WEBHOOK_UPDATING_SUBSCRIPTION', {
+    subscriptionId: subscription.id,
+    tenantId,
+    status,
+    hasRequestedPlan: Boolean(subscription.requested_plan_id),
+  });
+
+  const { error: updateError } = await admin
+    .from('tenant_subscriptions')
+    .update(subscriptionUpdate)
+    .eq('id', subscription.id);
+
+  if (updateError) {
+    console.error('WEBHOOK_SUBSCRIPTION_UPDATE_ERROR', updateError);
+    throw updateError;
+  }
+
+  return true;
+}
+
+function mapPreapprovalStatus(status: string | undefined) {
+  const statusMap: Record<string, string> = {
+    authorized: 'active',
+    paused: 'past_due',
+    cancelled: 'canceled',
+    pending: 'pending',
+  };
+  return statusMap[status || ''] || 'incomplete';
+}
+
 Deno.serve(async (request) => {
   console.log('MERCADO_PAGO_WEBHOOK_INICIO', {
     method: request.method,
@@ -68,8 +124,12 @@ Deno.serve(async (request) => {
 
   const url = new URL(request.url);
   const payload = await request.json().catch(() => null);
-  const dataId = String(payload?.data?.id || url.searchParams.get('data.id') || '');
-  const eventType = String(payload?.type || url.searchParams.get('type') || url.searchParams.get('topic') || '');
+
+  // O Mercado Pago envia data.id tanto na query string quanto no corpo.
+  // Para validação da assinatura, priorizamos o valor da query string,
+  // conforme o formato documentado para Webhooks.
+  const dataId = String(url.searchParams.get('data.id') || payload?.data?.id || '');
+  const eventType = String(url.searchParams.get('type') || payload?.type || url.searchParams.get('topic') || '');
 
   console.log('WEBHOOK_EVENT', {
     eventType,
@@ -94,10 +154,84 @@ Deno.serve(async (request) => {
       provider_subscription_id: dataId,
       payload,
     });
+
   if (eventError?.code === '23505') return jsonResponse({ received: true, duplicate: true });
   if (eventError) return errorResponse('Não foi possível registrar o evento.', 500);
 
   try {
+    if (eventType === 'subscription_authorized_payment') {
+      console.log('WEBHOOK_GET_AUTHORIZED_PAYMENT', { dataId });
+
+      // Para subscription_authorized_payment, data.id é o ID da fatura/pagamento
+      // autorizado, não o ID da assinatura. O Mercado Pago expõe a relação
+      // através de /authorized_payments/{id}.
+      const authorizedPayment = await mercadoPagoRequest(
+        `/authorized_payments/${encodeURIComponent(dataId)}`,
+      );
+
+      console.log('WEBHOOK_AUTHORIZED_PAYMENT', {
+        id: authorizedPayment?.id ?? dataId,
+        status: authorizedPayment?.status ?? null,
+        summarized: authorizedPayment?.summarized ?? null,
+        paymentStatus: authorizedPayment?.payment?.status ?? null,
+        preapprovalId: authorizedPayment?.preapproval_id ?? null,
+        externalReference: authorizedPayment?.external_reference ?? null,
+      });
+
+      const preapprovalId = String(authorizedPayment?.preapproval_id || '');
+      if (!preapprovalId) return jsonResponse({ received: true });
+
+      const preapproval = await mercadoPagoRequest(
+        `/preapproval/${encodeURIComponent(preapprovalId)}`,
+      );
+
+      const tenantId = String(
+        preapproval?.external_reference || authorizedPayment?.external_reference || '',
+      );
+
+      if (!tenantId) {
+        console.error('WEBHOOK_TENANT_REFERENCE_NOT_FOUND', {
+          dataId,
+          preapprovalId,
+        });
+        return jsonResponse({ received: true });
+      }
+
+      const paymentStatus = String(authorizedPayment?.payment?.status || '');
+      const invoiceStatus = String(authorizedPayment?.status || '');
+      const subscriptionStatus = String(preapproval?.status || '');
+
+      // Um pagamento aprovado confirma a cobrança atual. Mantemos a assinatura
+      // ativa somente se o próprio preapproval também estiver autorizado.
+      const status = paymentStatus === 'approved' && subscriptionStatus === 'authorized'
+        ? 'active'
+        : invoiceStatus === 'rejected' || paymentStatus === 'rejected'
+          ? 'past_due'
+          : mapPreapprovalStatus(subscriptionStatus);
+
+      await updateTenantSubscription(tenantId, preapprovalId, status, preapproval);
+
+      await admin
+        .from('billing_payment_events')
+        .update({
+          tenant_id: tenantId,
+          provider_subscription_id: preapprovalId,
+          processed_at: new Date().toISOString(),
+        })
+        .eq('provider_event_id', providerEventId)
+        .eq('provider', 'mercado_pago');
+
+      console.log('WEBHOOK_AUTHORIZED_PAYMENT_SUCCESS', {
+        dataId,
+        preapprovalId,
+        tenantId,
+        paymentStatus,
+        status,
+      });
+
+      return jsonResponse({ received: true });
+    }
+
     if (eventType === 'subscription_preapproval') {
       console.log('WEBHOOK_GET_PREAPPROVAL', { dataId });
     }
@@ -109,56 +243,18 @@ Deno.serve(async (request) => {
       externalReference: preapproval.external_reference ?? null,
     });
 
-    const tenantId = preapproval.external_reference;
+    const tenantId = String(preapproval.external_reference || '');
     if (!tenantId) return jsonResponse({ received: true });
 
-    const statusMap: Record<string, string> = {
-      authorized: 'active',
-      paused: 'past_due',
-      cancelled: 'canceled',
-      pending: 'pending',
-    };
-    const status = statusMap[preapproval.status] || 'incomplete';
-    const { data: subscription } = await admin
-      .from('tenant_subscriptions')
-      .select('id, requested_plan_id')
-      .eq('tenant_id', tenantId)
-      .maybeSingle();
-    if (!subscription) {
-      console.error('WEBHOOK_SUBSCRIPTION_NOT_FOUND', { tenantId, dataId });
-      return jsonResponse({ received: true });
-    }
-
-    const subscriptionUpdate: Record<string, unknown> = {
-      provider_subscription_id: dataId,
-      status,
-      current_period_start: preapproval.date_created || null,
-      current_period_end: preapproval.next_payment_date || null,
-      canceled_at: status === 'canceled' ? new Date().toISOString() : null,
-    };
-    if (status === 'active' && subscription.requested_plan_id) {
-      subscriptionUpdate.plan_id = subscription.requested_plan_id;
-    }
-
-    console.log('WEBHOOK_UPDATING_SUBSCRIPTION', {
-      subscriptionId: subscription.id,
-      tenantId,
-      status,
-      hasRequestedPlan: Boolean(subscription.requested_plan_id),
-    });
-
-    const { error: updateError } = await admin
-      .from('tenant_subscriptions')
-      .update(subscriptionUpdate)
-      .eq('id', subscription.id);
-    if (updateError) {
-      console.error('WEBHOOK_SUBSCRIPTION_UPDATE_ERROR', updateError);
-      throw updateError;
-    }
+    const status = mapPreapprovalStatus(preapproval.status);
+    await updateTenantSubscription(tenantId, dataId, status, preapproval);
 
     await admin
       .from('billing_payment_events')
-      .update({ tenant_id: tenantId, processed_at: new Date().toISOString() })
+      .update({
+        tenant_id: tenantId,
+        processed_at: new Date().toISOString(),
+      })
       .eq('provider_event_id', providerEventId)
       .eq('provider', 'mercado_pago');
 
