@@ -34,8 +34,6 @@ async function validSignature(request: Request, dataId: string) {
   }));
   if (!values.ts || !values.v1) return false;
 
-  // O Mercado Pago exige data.id em minúsculas no manifest da assinatura,
-  // mesmo quando o data.id recebido na URL possui letras maiúsculas.
   const normalizedDataId = dataId.toLowerCase();
   const manifest = `id:${normalizedDataId};request-id:${requestId};ts:${values.ts};`;
 
@@ -130,8 +128,6 @@ Deno.serve(async (request) => {
   const url = new URL(request.url);
   const payload = await request.json().catch(() => null);
 
-  // O Mercado Pago envia data.id tanto na query string quanto no corpo.
-  // Para validação da assinatura, usamos o valor da query string conforme a documentação.
   const dataId = String(url.searchParams.get('data.id') || payload?.data?.id || '');
   const eventType = String(url.searchParams.get('type') || payload?.type || url.searchParams.get('topic') || '');
 
@@ -140,12 +136,23 @@ Deno.serve(async (request) => {
     dataId,
     action: payload?.action ?? null,
     entity: payload?.entity ?? null,
+    liveMode: payload?.live_mode ?? null,
+    applicationId: payload?.application_id ?? null,
+    userId: payload?.user_id ?? null,
+    notificationId: payload?.id ?? null,
+    apiVersion: payload?.api_version ?? null,
   });
 
   if (!dataId) return errorResponse('ID do recurso não informado.', 400);
 
   if (!await validSignature(request, dataId)) {
-    console.error('WEBHOOK_INVALID_SIGNATURE', { eventType, dataId });
+    console.error('WEBHOOK_INVALID_SIGNATURE', {
+      eventType,
+      dataId,
+      liveMode: payload?.live_mode ?? null,
+      applicationId: payload?.application_id ?? null,
+      userId: payload?.user_id ?? null,
+    });
     return errorResponse('Assinatura do webhook inválida.', 401);
   }
 
@@ -166,9 +173,6 @@ Deno.serve(async (request) => {
     if (eventType === 'subscription_authorized_payment') {
       console.log('WEBHOOK_GET_AUTHORIZED_PAYMENT', { dataId });
 
-      // Para subscription_authorized_payment, data.id é o ID da fatura/pagamento
-      // autorizado, não o ID da assinatura. O Mercado Pago expõe a relação
-      // através de /authorized_payments/{id}.
       const authorizedPayment = await mercadoPagoRequest(
         `/authorized_payments/${encodeURIComponent(dataId)}`,
       );
@@ -205,8 +209,6 @@ Deno.serve(async (request) => {
       const invoiceStatus = String(authorizedPayment?.status || '');
       const subscriptionStatus = String(preapproval?.status || '');
 
-      // Um pagamento aprovado confirma a cobrança atual. Mantemos a assinatura
-      // ativa somente se o próprio preapproval também estiver autorizado.
       const status = paymentStatus === 'approved' && subscriptionStatus === 'authorized'
         ? 'active'
         : invoiceStatus === 'rejected' || paymentStatus === 'rejected'
