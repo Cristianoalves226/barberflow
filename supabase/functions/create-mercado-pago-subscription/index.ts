@@ -9,11 +9,6 @@ const admin = createClient(supabaseUrl, serviceRoleKey);
 function checkoutUrl(preapproval: Record<string, unknown>) {
   const rawUrl = preapproval.init_point || preapproval.sandbox_init_point;
   if (typeof rawUrl !== 'string' || !rawUrl) return rawUrl;
-
-  // O init_point retornado pelo Mercado Pago para preapproval pode conter
-  // `activation=true`. No checkout de teste, esse parâmetro leva para
-  // "Página inexistente". Removemos somente esse parâmetro e preservamos
-  // todos os demais dados do checkout.
   try {
     const url = new URL(rawUrl);
     url.searchParams.delete('activation');
@@ -98,12 +93,13 @@ Deno.serve(async (request) => {
 
   const { data: subscription, error: subscriptionError } = await admin
     .from('tenant_subscriptions')
-    .select('id, requested_plan_id, provider_subscription_id')
+    .select('id, status, requested_plan_id, provider_subscription_id')
     .eq('tenant_id', membership.tenant_id)
     .maybeSingle();
 
   console.log('STEP_3_SUBSCRIPTION', {
     found: !!subscription,
+    local_status: subscription?.status ?? null,
     requested_plan_id: subscription?.requested_plan_id ?? null,
     provider_subscription_id: !!subscription?.provider_subscription_id,
     error: subscriptionError?.message ?? null,
@@ -141,8 +137,6 @@ Deno.serve(async (request) => {
     ? { frequency: 1, frequency_type: 'years' }
     : { frequency: 1, frequency_type: 'months' };
 
-  // Em ambiente de teste, usamos exclusivamente a conta Test Buyer configurada.
-  // Nunca usamos o e-mail do usuário autenticado como pagador de teste.
   if (mpEnvironment === 'test' && (!testPayerEmail || !testPayerUserId)) {
     return errorResponse('Configure MP_TEST_PAYER_EMAIL e MP_TEST_PAYER_USER_ID para o ambiente de teste.');
   }
@@ -151,24 +145,36 @@ Deno.serve(async (request) => {
     if (subscription.provider_subscription_id) {
       console.log('STEP_4A_EXISTING_SUBSCRIPTION', {
         provider_subscription_id: subscription.provider_subscription_id,
+        local_status: subscription.status,
+        environment: mpEnvironment,
       });
 
       try {
-        console.log('STEP_4B_BEFORE_GET_PREAPPROVAL');
         const existing = await mercadoPagoRequest(
           `/preapproval/${encodeURIComponent(subscription.provider_subscription_id)}`,
         );
 
         console.log('STEP_4C_AFTER_GET_PREAPPROVAL', {
           id: existing?.id ?? null,
-          status: existing?.status ?? null,
+          mercadoPagoStatus: existing?.status ?? null,
+          localStatus: subscription.status ?? null,
           hasInitPoint: !!existing?.init_point,
           hasSandboxInitPoint: !!existing?.sandbox_init_point,
         });
 
         console.log('STEP_4C_EXISTING_PREAPPROVAL_DIAGNOSTICS', checkoutDiagnostics(existing));
 
-        if (existing.status === 'authorized') {
+        // A assinatura local é a fonte de verdade para decidir se a barbearia
+        // já possui uma assinatura ativa. Um preapproval antigo pode estar
+        // autorizado no Mercado Pago enquanto o registro local continua
+        // pending/incomplete (por exemplo, após falha na entrega do webhook).
+        // No ambiente de teste, esse preapproval pendente/autorizado pode ser
+        // descartado para permitir um novo checkout de teste.
+        const localSubscriptionIsActive = ['active', 'authorized'].includes(
+          String(subscription.status ?? '').toLowerCase(),
+        );
+
+        if (localSubscriptionIsActive && existing.status === 'authorized') {
           return errorResponse('Esta barbearia já possui uma assinatura ativa.', 409);
         }
 
@@ -186,19 +192,6 @@ Deno.serve(async (request) => {
         });
 
         const existingInitPoint = checkoutUrl(existing);
-        console.log('STEP_4C_CHECKOUT_URL', {
-          hasInitPoint: !!existingInitPoint,
-          initPointType: typeof existingInitPoint,
-          source: existing?.init_point
-            ? 'init_point'
-            : existing?.sandbox_init_point
-              ? 'sandbox_init_point'
-              : 'none',
-        });
-
-        // No ambiente de teste, não reutilizamos um checkout pending anterior.
-        // O Mercado Pago pode manter um init_point antigo/inutilizável; nesse caso,
-        // precisamos criar uma nova preapproval para obter um novo checkout.
         const shouldReusePendingCheckout = mpEnvironment !== 'test';
 
         if (existing.status === 'pending' && existingInitPoint && !payerMismatch && shouldReusePendingCheckout) {
@@ -213,10 +206,11 @@ Deno.serve(async (request) => {
         console.log('STEP_4E_CLEARING_STALE_SUBSCRIPTION', {
           provider_subscription_id: subscription.provider_subscription_id,
           mercadoPagoStatus: existing?.status ?? null,
+          localStatus: subscription.status ?? null,
           hasCheckoutUrl: !!existingInitPoint,
           payerMismatch,
-          reason: mpEnvironment === 'test' && existing.status === 'pending'
-            ? 'test_environment_pending_checkout_not_reused'
+          reason: mpEnvironment === 'test'
+            ? 'test_environment_existing_subscription_not_reused'
             : 'stale_or_invalid_subscription',
         });
 
@@ -235,11 +229,9 @@ Deno.serve(async (request) => {
       } catch (error) {
         console.error('STEP_4D_EXISTING_SUBSCRIPTION_ERROR', error);
         const message = error instanceof Error ? error.message : '';
-        console.log('STEP_4D_EXISTING_SUBSCRIPTION_ERROR_MESSAGE', { message });
 
         if (!message.includes('HTTP 404')) throw error;
 
-        console.log('STEP_4E_CLEARING_INVALID_SUBSCRIPTION');
         const { error: clearError } = await admin
           .from('tenant_subscriptions')
           .update({ provider_subscription_id: null, status: 'incomplete' })
@@ -311,8 +303,6 @@ Deno.serve(async (request) => {
     });
 
     if (createdPayerMismatch) {
-      // Não associamos uma assinatura criada com o pagador errado ao tenant.
-      // A assinatura no Mercado Pago continua existindo para investigação manual.
       throw new Error(
         `O Mercado Pago vinculou a assinatura ao payer_id ${createdPayerId || 'ausente'}, `
         + `mas o Test Buyer configurado é ${expectedPayerId}. `
@@ -340,9 +330,6 @@ Deno.serve(async (request) => {
         : preapproval?.sandbox_init_point
           ? 'sandbox_init_point'
           : 'none',
-      activationRemoved: typeof preapproval?.init_point === 'string'
-        ? preapproval.init_point.includes('activation=') && typeof initPoint === 'string' && !initPoint.includes('activation=')
-        : false,
     });
 
     if (!initPoint) {
