@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="BarberFlow: sistema completo de gestão para barbearias. Organize agenda, clientes, serviços, equipe e financeiro em um só lugar.">
+  <meta name="theme-color" content="#0b0b0d">
+  <title>BarberFlow — Gestão inteligente para barbearias</title>
+  <style>
+    :root{
+      --bg:#08090b;--surface:#111318;--surface2:#171a20;--text:#f5f5f5;--muted:#a6abb5;
+      --line:rgba(255,255,255,.09);--accent:#d4a84f;--accent2:#f0c96d;--max:1120px;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:
+      radial-gradient(circle at 80% 0%,rgba(212,168,79,.12),transparent 30%),var(--bg);color:var(--text);line-height:1.6}
+    a{color:inherit;text-decoration:none}
+    .container{width:min(var(--max),calc(100% - 40px));margin:auto}
+    header{position:sticky;top:0;z-index:10;background:rgba(8,9,11,.82);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+    nav{height:72px;display:flex;align-items:center;justify-content:space-between}
+    .brand{font-size:1.35rem;font-weight:800;letter-spacing:-.04em}.brand span{color:var(--accent)}
+    .navlinks{display:flex;gap:26px;color:var(--muted);font-size:.94rem}
+    .navlinks a:hover{color:var(--text)}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 19px;border-radius:11px;font-weight:750;border:1px solid transparent;transition:.2s;cursor:pointer}
+    .btn-primary{background:var(--accent);color:#17120a}.btn-primary:hover{background:var(--accent2);transform:translateY(-1px)}
+    .btn-ghost{border-color:var(--line);background:rgba(255,255,255,.03)}.btn-ghost:hover{background:rgba(255,255,255,.07)}
+    .hero{padding:105px 0 85px;text-align:center}
+    .eyebrow{display:inline-flex;padding:7px 12px;border:1px solid rgba(212,168,79,.3);background:rgba(212,168,79,.08);border-radius:999px;color:var(--accent2);font-size:.82rem;font-weight:700;margin-bottom:20px}
+    h1{font-size:clamp(2.7rem,7vw,5.7rem);line-height:.98;letter-spacing:-.065em;max-width:900px;margin:0 auto 24px}
+    h1 span{color:var(--accent)}
+    .hero p{max-width:690px;margin:auto;color:var(--muted);font-size:1.12rem}
+    .hero-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:32px}
+    .proof{display:flex;justify-content:center;gap:24px;flex-wrap:wrap;margin-top:28px;color:#c8cbd1;font-size:.88rem}
+    .proof span::before{content:"✓";color:var(--accent);font-weight:900;margin-right:7px}
+    section{padding:85px 0}
+    .section-head{max-width:700px;margin-bottom:42px}.section-head h2{font-size:clamp(2rem,4vw,3.2rem);letter-spacing:-.045em;line-height:1.05;margin-bottom:13px}.section-head p{color:var(--muted)}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+    .card{background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.018));border:1px solid var(--line);border-radius:18px;padding:26px}
+    .icon{width:44px;height:44px;display:grid;place-items:center;border-radius:12px;background:rgba(212,168,79,.1);color:var(--accent);font-size:1.25rem;margin-bottom:20px}
+    .card h3{font-size:1.1rem;margin-bottom:7px}.card p{color:var(--muted);font-size:.94rem}
+    .pricing{align-items:stretch}.price-card{position:relative}.price-card.featured{border-color:rgba(212,168,79,.6);box-shadow:0 20px 60px rgba(0,0,0,.25)}
+    .badge{position:absolute;right:18px;top:18px;background:var(--accent);color:#17120a;padding:5px 9px;border-radius:999px;font-size:.72rem;font-weight:850}
+    .price-card h3{font-size:1.25rem}.price{font-size:2.5rem;font-weight:850;letter-spacing:-.05em;margin:10px 0 4px}.price small{font-size:.9rem;color:var(--muted);font-weight:500}
+    .price-desc{color:var(--muted);font-size:.9rem;min-height:48px}.features{list-style:none;margin:22px 0 25px;display:grid;gap:10px;color:#d7d9de;font-size:.9rem}.features li:before{content:"✓";color:var(--accent);font-weight:900;margin-right:9px}
+    .price-card .btn{width:100%}
+    .steps{counter-reset:step}.step{position:relative;padding-left:62px}.step:before{counter-increment:step;content:counter(step);position:absolute;left:0;top:0;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:rgba(212,168,79,.12);color:var(--accent);font-weight:850}
+    .cta{border:1px solid rgba(212,168,79,.25);background:linear-gradient(135deg,rgba(212,168,79,.12),rgba(255,255,255,.025));border-radius:24px;padding:55px 35px;text-align:center}.cta h2{font-size:clamp(2rem,4vw,3.1rem);letter-spacing:-.045em;margin-bottom:12px}.cta p{color:var(--muted);max-width:650px;margin:0 auto 25px}
+    footer{border-top:1px solid var(--line);padding:28px 0;color:#858b95;font-size:.84rem}.footer-inner{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+    @media(max-width:820px){.navlinks{display:none}.grid{grid-template-columns:1fr}.hero{padding-top:75px}section{padding:65px 0}.price-desc{min-height:0}}
+  </style>
+</head>
+<body>
+<header>
+  <nav class="container">
+    <a class="brand" href="#inicio">Barber<span>Flow</span></a>
+    <div class="navlinks">
+      <a href="#recursos">Recursos</a><a href="#planos">Planos</a><a href="#como-funciona">Como funciona</a>
+    </div>
+    <a class="btn btn-primary" href="#planos">Começar agora</a>
+  </nav>
+</header>
+
+<main id="inicio">
+  <section class="hero">
+    <div class="container">
+      <div class="eyebrow">Gestão inteligente para barbearias</div>
+      <h1>Sua barbearia organizada. <span>Seu negócio no controle.</span></h1>
+      <p>O BarberFlow reúne agenda, clientes, serviços, equipe e financeiro em um único sistema para você gastar menos tempo organizando e mais tempo cuidando do seu negócio.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#planos">Conhecer os planos →</a>
+        <a class="btn btn-ghost" href="#recursos">Ver recursos</a>
+      </div>
+      <div class="proof"><span>Agenda organizada</span><span>Gestão de clientes</span><span>Controle financeiro</span><span>Multiusuário</span></div>
+    </div>
+  </section>
+
+  <section id="recursos">
+    <div class="container">
+      <div class="section-head">
+        <h2>Tudo que sua barbearia precisa em um só lugar.</h2>
+        <p>Uma plataforma criada para simplificar a rotina e transformar informações do dia a dia em uma gestão mais organizada.</p>
+      </div>
+      <div class="grid">
+        <article class="card"><div class="icon">◷</div><h3>Agenda</h3><p>Visualize horários e organize seus atendimentos com mais clareza, evitando conflitos na agenda.</p></article>
+        <article class="card"><div class="icon">♙</div><h3>Clientes</h3><p>Cadastre clientes, acompanhe histórico de atendimentos e mantenha suas informações organizadas.</p></article>
+        <article class="card"><div class="icon">✦</div><h3>Serviços</h3><p>Gerencie serviços, preços e duração para manter seu catálogo sempre atualizado.</p></article>
+        <article class="card"><div class="icon">♙</div><h3>Equipe</h3><p>Organize barbeiros e permissões de acesso de acordo com a estrutura da sua barbearia.</p></article>
+        <article class="card"><div class="icon">R$</div><h3>Financeiro</h3><p>Acompanhe receitas, despesas e movimentações para entender melhor o negócio.</p></article>
+        <article class="card"><div class="icon">▥</div><h3>Dashboard</h3><p>Tenha uma visão centralizada dos principais indicadores da sua operação.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section id="planos">
+    <div class="container">
+      <div class="section-head">
+        <h2>Escolha o plano para sua barbearia.</h2>
+        <p>Comece com os recursos que fazem sentido para o seu momento e evolua conforme sua operação crescer.</p>
+      </div>
+      <div class="grid pricing">
+        <article class="card price-card">
+          <h3>Essencial</h3><div class="price">R$ 29,90 <small>/mês</small></div>
+          <p class="price-desc">Para barbearias que querem organizar a operação.</p>
+          <ul class="features"><li>Agenda</li><li>Clientes</li><li>Serviços</li><li>Histórico de atendimentos</li><li>Dashboard básico</li></ul>
+          <a class="btn btn-primary checkout" data-plan="essencial" href="../">Começar agora</a>
+        </article>
+        <article class="card price-card featured">
+          <span class="badge">Mais escolhido</span>
+          <h3>Profissional</h3><div class="price">R$ 49,90 <small>/mês</small></div>
+          <p class="price-desc">Para barbearias em crescimento e com equipe.</p>
+          <ul class="features"><li>Tudo do Essencial</li><li>Gestão de equipe</li><li>Controle financeiro</li><li>Relatórios</li><li>Mais recursos de gestão</li></ul>
+          <a class="btn btn-primary checkout" data-plan="profissional" href="../">Começar agora</a>
+        </article>
+        <article class="card price-card">
+          <h3>Premium</h3><div class="price">R$ 79,90 <small>/mês</small></div>
+          <p class="price-desc">Para operações que precisam de uma gestão mais completa.</p>
+          <ul class="features"><li>Tudo do Profissional</li><li>Indicadores avançados</li><li>Relatórios completos</li><li>Gestão ampliada</li><li>Recursos avançados</li></ul>
+          <a class="btn btn-primary checkout" data-plan="premium" href="../">Começar agora</a>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="como-funciona">
+    <div class="container">
+      <div class="section-head"><h2>Comece em poucos passos.</h2><p>O objetivo é deixar a gestão simples desde o primeiro acesso.</p></div>
+      <div class="grid steps">
+        <article class="card step"><h3>Crie sua conta</h3><p>Cadastre a barbearia e comece seu espaço de gestão.</p></article>
+        <article class="card step"><h3>Configure sua operação</h3><p>Adicione equipe, serviços, horários e clientes.</p></article>
+        <article class="card step"><h3>Gerencie tudo</h3><p>Use agenda, financeiro e indicadores para acompanhar o negócio.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <div class="cta">
+        <h2>Pronto para organizar sua barbearia?</h2>
+        <p>Escolha o plano que combina com sua operação e comece a centralizar a gestão do seu negócio.</p>
+        <a class="btn btn-primary" href="#planos">Ver planos e começar →</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="container footer-inner">
+    <span>BarberFlow • Gestão para barbearias</span>
+    <span>© 2026 BarberFlow</span>
+  </div>
+</footer>
+</body>
+</html>

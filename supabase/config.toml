@@ -6,3 +6,9 @@ verify_jwt = false
 
 [functions.create-mercado-pago-subscription]
 verify_jwt = false
+
+[functions.cakto-webhook]
+verify_jwt = false
+
+[functions.create-cakto-checkout]
+verify_jwt = true
